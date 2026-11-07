@@ -1,0 +1,17 @@
+# 运行产物
+*.log
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+server_crash.log
+terracotta.log
+
+# 备份
+*.bak
+*.bak2
+
+# 系统
+Thumbs.db
+desktop.ini
