@@ -1130,7 +1130,8 @@ TC_STATE_TEXT = {
 
 TC_SETTINGS_FILE = "terracotta-home.json"
 _tc_cfg = {"loaded": False, "enable": True, "autostart": False,
-           "autostop": False, "autofill": False, "nick": "", "path": ""}
+           "autostop": False, "autofill": False, "nick": "", "path": "",
+           "detected": ""}
 
 
 def _tc_cfg_path():
@@ -1148,7 +1149,7 @@ def _tc_cfg_load():
         for k in ("enable", "autostart", "autostop", "autofill"):
             if k in data:
                 _tc_cfg[k] = bool(data[k])
-        for k in ("nick", "path"):
+        for k in ("nick", "path", "detected"):
             if k in data and isinstance(data[k], str):
                 _tc_cfg[k] = data[k]
     except (OSError, ValueError):
@@ -1163,36 +1164,32 @@ def _tc_cfg_save():
         with open(_tc_cfg_path(), "w", encoding="utf-8") as f:
             json.dump({"enable": _tc_cfg["enable"], "autostart": _tc_cfg["autostart"],
                        "autostop": _tc_cfg["autostop"], "autofill": _tc_cfg["autofill"],
-                       "nick": _tc_cfg["nick"], "path": _tc_cfg["path"]}, f, ensure_ascii=False)
+                       "nick": _tc_cfg["nick"], "path": _tc_cfg["path"],
+                       "detected": _tc_cfg["detected"]}, f, ensure_ascii=False)
     except OSError:
         pass
 
 
-# 点「自动检测」/「浏览」后在路径那一行显示结果；不自动消失，路径变了才恢复
+# 点「自动检测」后路径那一行要一直显示「✔ 已找到」，重启服务也不能丢，
+# 所以结果记在配置文件的 detected 字段里（等于「这条路径是检测出来的」）
 _tc_notice = ""
-_tc_notice_path = ""
 
 
-def _tc_say(text, path=""):
-    global _tc_notice, _tc_notice_path
+def _tc_say(text):
+    global _tc_notice
     _tc_notice = text
-    _tc_notice_path = path
 
 
 def _tc_path_text():
-    """路径那一行：刚点过按钮就显示结果，路径变了才恢复成真实路径"""
-    global _tc_notice
+    """路径那一行：检测出来的路径前面加 ✔，找不到时提示去点「浏览」"""
     cur = _tc_exe() or ""
+    if cur:
+        if _tc_cfg_load().get("detected") == cur:
+            return "✔ 已找到：" + cur
+        return cur
     if _tc_notice:
-        if _tc_notice_path:
-            if cur == _tc_notice_path:
-                return _tc_notice
-            _tc_notice = ""
-        elif not cur:
-            return _tc_notice
-        else:
-            _tc_notice = ""
-    return cur or "未找到 terracotta.exe（点「浏览」手动选）"
+        return _tc_notice
+    return "未找到 terracotta.exe（点「浏览」手动选）"
 
 
 def _tc_exe():
@@ -1696,9 +1693,10 @@ def _tc_setpath(path):
     if not p or not os.path.isfile(p):
         return False
     _tc_cfg["path"] = p
+    _tc_cfg["detected"] = ""      # 手动选的路径不算「检测结果」，那行就显示纯路径
     _tc_cfg_save()
     _tc_port_forget()
-    _tc_say("✔ 已设置为：" + p, p)
+    _tc_say("")
     return True
 
 
@@ -1761,9 +1759,9 @@ def _tc_detect():
     for p in cands:
         if os.path.isfile(p):
             _tc_cfg["path"] = p
+            _tc_cfg["detected"] = p      # 标记「这条是检测出来的」，主页那行会显示 ✔
             _tc_cfg_save()
-            # 点完必须能看出变化：路径那一行先闪 6 秒「已找到」
-            _tc_say("✔ 已找到：" + p, p)
+            _tc_say("")
             return True
     _tc_say("✘ 没找到 terracotta.exe，点「浏览」手动选")
     return False
