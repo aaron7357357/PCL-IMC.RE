@@ -1100,7 +1100,7 @@ def _live_values(st):
             "tcauto": "1" if _tc_cfg_load()["autostart"] else "0",
             "tcstop": "1" if _tc_cfg_load()["autostop"] else "0",
             "tcfill": "1" if _tc_cfg_load()["autofill"] else "0",
-            "tcpath": _tc_exe() or "未找到 terracotta.exe",
+            "tcpath": _tc_path_text(),
             "btnenable": ("☑ " if _tc_cfg_load()["enable"] else "☐ ") + "启用陶瓦联机",
             "btnautostart": ("☑ " if _tc_cfg_load()["autostart"] else "☐ ") + "启动启动器时自动启动",
             "btnautofill": ("☑ " if _tc_cfg_load()["autofill"] else "☐ ") + "联机成功后自动填入服务器地址",
@@ -1166,6 +1166,24 @@ def _tc_cfg_save():
                        "nick": _tc_cfg["nick"], "path": _tc_cfg["path"]}, f, ensure_ascii=False)
     except OSError:
         pass
+
+
+# 点「自动检测」/「浏览」后在路径那一行临时显示结果，避免看起来像没反应（秒）
+_tc_notice = ""
+_tc_notice_until = 0.0
+
+
+def _tc_say(text, secs=6):
+    global _tc_notice, _tc_notice_until
+    _tc_notice = text
+    _tc_notice_until = time.time() + secs
+
+
+def _tc_path_text():
+    """路径那一行：刚点过按钮就显示结果，平时只显示当前路径"""
+    if _tc_notice and time.time() < _tc_notice_until:
+        return _tc_notice
+    return _tc_exe() or "未找到 terracotta.exe（点「浏览」手动选）"
 
 
 def _tc_exe():
@@ -1671,6 +1689,7 @@ def _tc_setpath(path):
     _tc_cfg["path"] = p
     _tc_cfg_save()
     _tc_port_forget()
+    _tc_say("✔ 已设置为：" + p)
     return True
 
 
@@ -1734,7 +1753,10 @@ def _tc_detect():
         if os.path.isfile(p):
             _tc_cfg["path"] = p
             _tc_cfg_save()
+            # 点完必须能看出变化：路径那一行先闪 6 秒「已找到」
+            _tc_say("✔ 已找到：" + p)
             return True
+    _tc_say("✘ 没找到 terracotta.exe，点「浏览」手动选")
     return False
 
 
