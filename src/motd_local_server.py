@@ -1101,10 +1101,192 @@ def _live_values(st):
             "tcstop": "1" if _tc_cfg_load()["autostop"] else "0",
             "tcfill": "1" if _tc_cfg_load()["autofill"] else "0",
             "tcpath": _tc_path_text(),
+            "memtext": _mem_text,
             "btnenable": ("☑ " if _tc_cfg_load()["enable"] else "☐ ") + "启用陶瓦联机",
             "btnautostart": ("☑ " if _tc_cfg_load()["autostart"] else "☐ ") + "启动启动器时自动启动",
             "btnautofill": ("☑ " if _tc_cfg_load()["autofill"] else "☐ ") + "联机成功后自动填入服务器地址",
             "btnautostop": ("☑ " if _tc_cfg_load()["autostop"] else "☐ ") + "退出启动器时停止陶瓦联机"}
+
+
+# ---------------- 内存优化 ----------------
+# 跟 PCL 百宝箱里的「内存优化」同一套做法：先拿 SeProfileSingleProcessPrivilege，
+# 再用 NtSetSystemInformation(SystemMemoryListInformation) 依次清工作集 / 刷已修改页 /
+# 清待命列表；拿不到权限就退化成逐个进程 EmptyWorkingSet。
+
+_mem_lock = threading.Lock()
+_mem_busy = False
+_mem_text = "点一下，释放被缓存占住的物理内存"
+
+
+def _mem_fmt(nbytes):
+    mb = (nbytes or 0) / 1048576.0
+    if mb >= 1024:
+        return "%.1f GB" % (mb / 1024.0)
+    return "%d MB" % int(round(mb))
+
+
+def _mem_available():
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MS(ctypes.Structure):
+            _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        m = MS()
+        m.dwLength = ctypes.sizeof(m)
+        ctypes.WinDLL("kernel32").GlobalMemoryStatusEx(ctypes.byref(m))
+        return int(m.ullAvailPhys)
+    except Exception:
+        return 0
+
+
+def _mem_privilege():
+    """启用 SeProfileSingleProcessPrivilege（PCL 的内存优化同样需要它，所以要管理员）"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+
+        class LUID(ctypes.Structure):
+            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+        class LA(ctypes.Structure):
+            _fields_ = [("Luid", LUID), ("Attributes", wintypes.DWORD)]
+
+        class TP(ctypes.Structure):
+            _fields_ = [("PrivilegeCount", wintypes.DWORD), ("Privileges", LA * 1)]
+
+        h = wintypes.HANDLE()
+        if not advapi.OpenProcessToken(wintypes.HANDLE(k32.GetCurrentProcess()),
+                                       0x20 | 0x8, ctypes.byref(h)):
+            return False
+        luid = LUID()
+        if not advapi.LookupPrivilegeValueW(None, "SeProfileSingleProcessPrivilege", ctypes.byref(luid)):
+            k32.CloseHandle(h)
+            return False
+        tp = TP()
+        tp.PrivilegeCount = 1
+        tp.Privileges[0].Luid = luid
+        tp.Privileges[0].Attributes = 0x2
+        ctypes.set_last_error(0)
+        ok = advapi.AdjustTokenPrivileges(h, False, ctypes.byref(tp), 0, None, None)
+        err = ctypes.get_last_error()
+        k32.CloseHandle(h)
+        return bool(ok) and err == 0
+    except Exception:
+        return False
+
+
+def _mem_purge():
+    """清工作集 / 刷已修改页 / 清待命列表，返回成功的条数（0~3）"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ntdll = ctypes.WinDLL("ntdll")
+        done = 0
+        for cmd in (2, 3, 4):
+            v = wintypes.DWORD(cmd)
+            st = ntdll.NtSetSystemInformation(0x50, ctypes.byref(v), ctypes.sizeof(v))
+            if (st & 0xFFFFFFFF) == 0:
+                done += 1
+        return done
+    except Exception:
+        return 0
+
+
+def _mem_trim_processes():
+    """没权限时的退路：能打开哪个进程就清哪个的工作集"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+
+        class PE32(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD),
+                        ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                        ("szExeFile", ctypes.c_char * 260)]
+
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)
+        if snap == -1:
+            return 0
+        n = 0
+        try:
+            e = PE32()
+            e.dwSize = ctypes.sizeof(e)
+            if not k32.Process32First(snap, ctypes.byref(e)):
+                return 0
+            while True:
+                h = k32.OpenProcess(0x0100 | 0x0400, False, e.th32ProcessID)
+                if h:
+                    if psapi.EmptyWorkingSet(h):
+                        n += 1
+                    k32.CloseHandle(h)
+                if not k32.Process32Next(snap, ctypes.byref(e)):
+                    break
+        finally:
+            k32.CloseHandle(snap)
+        return n
+    except Exception:
+        return 0
+
+
+def _mem_worker():
+    global _mem_busy, _mem_text
+    try:
+        before = _mem_available()
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+        if _mem_privilege() and _mem_purge() > 0:
+            time.sleep(0.7)
+            after = _mem_available()
+            _mem_text = "已释放 %s（可用 %s → %s）" % (
+                _mem_fmt(after - before), _mem_fmt(before), _mem_fmt(after))
+            _tc_log("内存优化：释放 %s" % _mem_fmt(after - before))
+        else:
+            n = _mem_trim_processes()
+            time.sleep(0.7)
+            after = _mem_available()
+            if n:
+                _mem_text = "已清理 %d 个进程，释放 %s（要清系统缓存得有管理员权限）" % (
+                    n, _mem_fmt(after - before))
+            else:
+                _mem_text = "优化失败：需要管理员权限"
+            _tc_log("内存优化（降级）：%s" % _mem_text)
+    except Exception as e:
+        _mem_text = "优化失败：%s" % e
+    finally:
+        with _mem_lock:
+            _mem_busy = False
+
+
+def _mem_optimize():
+    """主页按钮调用：后台跑，立刻返回，结果通过 live:memtext 显示"""
+    global _mem_busy, _mem_text
+    with _mem_lock:
+        if _mem_busy:
+            return False
+        _mem_busy = True
+    _mem_text = "正在优化内存……"
+    threading.Thread(target=_mem_worker, daemon=True).start()
+    return True
 
 
 # ---------------- 陶瓦联机（Terracotta） ----------------
@@ -1908,6 +2090,14 @@ def build_page():
                         '                   Text="版本：—　在线：—" />\n'
                         + _launch_block())
 
+    # 内存优化卡：效果等同 PCL 百宝箱里的「内存优化」
+    mem_card = _card("内存优化",
+                     '        <local:MyButton Tag="act:memopt" Height="32" HorizontalAlignment="Left" Padding="16,0,16,0"\n'
+                     '                        ColorType="Highlight" Text="内存优化"\n'
+                     '                        ToolTip="清工作集、刷已修改页、清待命列表，和百宝箱里那个「内存优化」一个效果" />\n'
+                     '        <TextBlock Tag="live:memtext" TextWrapping="Wrap" Margin="0,8,0,0"\n'
+                     '                   ' + _fg() + ' FontSize="12" Text="点一下，释放被缓存占住的物理内存" />\n')
+
     # 在线玩家卡（标题固定，人数和名单在正文里实时更新）
     pl_card = _card("在线玩家",
                     '        <TextBlock Tag="live:plist" TextWrapping="Wrap" ' + _fg() + '\n'
@@ -1996,7 +2186,7 @@ def build_page():
         )
     qq_card = _card("加入 QQ 群", "".join(qq_rows))
 
-    return banner + status_card + link_card + _versions_card() + pl_card + qq_card + _zan_card() + _author_card() + _about_card()
+    return banner + status_card + mem_card + link_card + _versions_card() + pl_card + qq_card + _zan_card() + _author_card() + _about_card()
 
 
 def _zan_card():
@@ -2139,6 +2329,8 @@ class Handler(BaseHTTPRequestHandler):
                 ok = _tc_setpath((q.get("path") or [""])[0])
             elif action == "tc-fillnow":
                 ok = _tc_fillnow()
+            elif action == "memopt":
+                ok = _mem_optimize()
             elif action == "tc-autostart":
                 ok = _tc_autostart()
             elif action == "tc-autostop":
