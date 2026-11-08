@@ -73,6 +73,7 @@ _status_cache = {"time": 0, "data": None}
 def _background_refresh():
     """后台线程：持续拉取服务器状态并更新缓存，让主页数据始终接近实时"""
     last_servers = 0.0
+    last_tcwatch = 0.0
     while True:
         try:
             st = fetch_status(STATUS_QUERY or SERVER)
@@ -80,6 +81,12 @@ def _background_refresh():
             _status_cache["data"] = st
         except Exception:
             pass
+        if time.time() - last_tcwatch > 4:           # 陶瓦自动停止兜底
+            last_tcwatch = time.time()
+            try:
+                _tc_autostop_watch()
+            except Exception:
+                pass
         if time.time() - last_servers > 30:          # 顺手把 imc 补进多人游戏列表
             last_servers = time.time()
             try:
@@ -1521,9 +1528,87 @@ def _tc_open_url():
     return "http://127.0.0.1:%d/" % port if port else None
 
 
+def _pcl_running():
+    """PCL 主程序在不在跑（用进程快照，不启动任何子进程）"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        TH32CS_SNAPPROCESS = 0x00000002
+
+        class PE32(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD),
+                        ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                        ("szExeFile", ctypes.c_char * 260)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap == -1:
+            return True
+        try:
+            e = PE32()
+            e.dwSize = ctypes.sizeof(PE32)
+            if not k32.Process32First(snap, ctypes.byref(e)):
+                return True
+            while True:
+                name = e.szExeFile.decode("mbcs", "replace").lower()
+                if name == "plain craft launcher 2.exe":
+                    return True
+                if not k32.Process32Next(snap, ctypes.byref(e)):
+                    break
+            return False
+        finally:
+            k32.CloseHandle(snap)
+    except Exception:
+        return True
+
+
+def _tc_autostop_watch():
+    """服务端兜底：设置开了「退出启动器时停止」，而 PCL 已经不在了，就把陶瓦停掉"""
+    try:
+        _tc_cfg_load()
+        if not _tc_cfg.get("autostop"):
+            return
+        if _pcl_running():
+            return
+        if not _tc_running():
+            return
+        _tc_log("PCL 已退出，按设置停止陶瓦")
+        _tc_stop()
+    except Exception:
+        pass
+
+
+def _tc_autostart():
+    """PCL 启动时调用：如果开了「启动启动器时自动启动」就把陶瓦拉起来"""
+    _tc_cfg_load()
+    if not _tc_cfg.get("autostart"):
+        return False
+    if _tc_running():
+        return True
+    return _tc_start()
+
+
+def _tc_autostop():
+    """PCL 退出时调用：如果开了「退出启动器时停止陶瓦联机」就结束陶瓦"""
+    _tc_cfg_load()
+    if not _tc_cfg.get("autostop"):
+        return False
+    if not _tc_running():
+        return True
+    return _tc_stop()
+
+
 def _tc_toggle(key):
     """翻转主页上的开关（enable / autostart / autostop / autofill），并写回配置文件"""
     _tc_cfg_load()
+    # 主页上传的是实时字段名（tcenable / tcauto / tcfill / tcstop），这里映射成配置键
+    alias = {"tcenable": "enable", "tcauto": "autostart",
+             "tcfill": "autofill", "tcstop": "autostop"}
+    key = alias.get(key, key)
     if key not in ("enable", "autostart", "autostop", "autofill"):
         return False
     _tc_cfg[key] = not bool(_tc_cfg.get(key))
@@ -1696,62 +1781,62 @@ def build_page():
 
     # 联机卡：按钮带 Tag="act:*"，由 PCLPatch.dll 接管点击，直接驱动本机陶瓦（Terracotta）
     _TC_CARD_XAML = """        <local:MyCheckBox Tag="chk:tcenable" Text="启用陶瓦联机" Checked="True" Margin="0,0,0,8" ToolTip="关掉后主页只显示状态，不再自动拉起陶瓦" />
-            <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Tag="live:tcpath" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                           VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF6B7885" FontSize="12"
-                           Text="未找到 terracotta.exe" />
-                <local:MyButton Grid.Column="1" Tag="act:tc-detect" Height="30" Padding="10,0,10,0"
-                                ColorType="Highlight" Text="自动检测" ToolTip="在 PCL 的陶瓦目录里找 terracotta.exe" />
-            </Grid>
-            <local:MyTextBox Tag="in:nick" Height="32" Margin="0,0,0,8" FontSize="13"
-                             VerticalContentAlignment="Center" Padding="8,0,8,0"
-                             HintText="联机昵称（可留空，留空用陶瓦默认昵称）" />
-            <TextBlock Tag="live:tc" TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" @@FG@@
-                       Text="正在检查陶瓦……" />
-            <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="1.4*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <local:MyTextBox Grid.Column="0" Tag="in:code" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
-                                 FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"
-                                 HintText="U/XXXX-XXXX-XXXX-XXXX" />
-                <local:MyButton Grid.Column="1" Tag="act:tc-join" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
-                                Padding="10,0,10,0" ColorType="Highlight" Text="加入房间" />
-                <local:MyButton Grid.Column="2" Tag="act:tc-copy" HorizontalAlignment="Stretch" Height="32"
-                                Padding="10,0,10,0" ColorType="Highlight" Text="复制邀请码" />
-            </Grid>
-            <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <local:MyButton Grid.Column="0" Tag="act:tc-start" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="启动组件" ToolTip="只启动陶瓦，不进房间" />
-                <local:MyButton Grid.Column="1" Tag="act:tc-stop|dis:tcrun" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="停止组件" ToolTip="结束房间并退出陶瓦进程" />
-                <local:MyButton Grid.Column="2" Tag="act:tc-host" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="创建房间" ToolTip="启动陶瓦并等待你开放局域网世界" />
-                <local:MyButton Grid.Column="3" Tag="act:tc-detach" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="断开房间" ToolTip="只退出房间，陶瓦进程留着" />
-                <local:MyButton Grid.Column="4" Tag="act:tc-url" HorizontalAlignment="Stretch" Height="32" Padding="6,0,6,0" ColorType="Highlight" Text="复制连接地址" ToolTip="加入成功后，把连接地址填进游戏的服务器地址" />
-            </Grid>
-            <Grid Margin="0,0,0,4">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <local:MyCheckBox Grid.Column="0" Tag="chk:tcauto" Text="启动启动器时自动启动" Checked="False" Margin="0,0,6,0" />
-                <local:MyCheckBox Grid.Column="1" Tag="chk:tcfill" Text="联机成功后自动填入服务器地址" Checked="False" />
-            </Grid>
-            <local:MyCheckBox Tag="chk:tcstop" Text="退出启动器时停止陶瓦联机" Checked="False" Margin="0,0,0,8" />
-            <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
-                       Text="创建房间后，进单人存档按 ESC → 对局域网开放即可生成邀请码；加入成功后点「复制连接地址」填进服务器地址。" />
-    """
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Tag="live:tcpath" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF6B7885" FontSize="12"
+                       Text="未找到 terracotta.exe" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-detect" Height="30" Padding="10,0,10,0"
+                            ColorType="Highlight" Text="自动检测" ToolTip="在 PCL 的陶瓦目录里找 terracotta.exe" />
+        </Grid>
+        <local:MyTextBox Tag="in:nick" Height="32" Margin="0,0,0,8" FontSize="13"
+                         VerticalContentAlignment="Center" Padding="8,0,8,0"
+                         HintText="联机昵称（可留空，留空用陶瓦默认昵称）" />
+        <TextBlock Tag="live:tc" TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" @@FG@@
+                   Text="正在检查陶瓦……" />
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.4*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <local:MyTextBox Grid.Column="0" Tag="in:code" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
+                             FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"
+                             HintText="U/XXXX-XXXX-XXXX-XXXX" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-join" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
+                            Padding="10,0,10,0" ColorType="Highlight" Text="加入房间" />
+            <local:MyButton Grid.Column="2" Tag="act:tc-copy" HorizontalAlignment="Stretch" Height="32"
+                            Padding="10,0,10,0" ColorType="Highlight" Text="复制邀请码" />
+        </Grid>
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" Tag="act:tc-start" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="启动组件" ToolTip="只启动陶瓦，不进房间" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-stop|dis:tcrun" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="停止组件" ToolTip="结束房间并退出陶瓦进程" />
+            <local:MyButton Grid.Column="2" Tag="act:tc-host" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="创建房间" ToolTip="启动陶瓦并等待你开放局域网世界" />
+            <local:MyButton Grid.Column="3" Tag="act:tc-detach" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="断开房间" ToolTip="只退出房间，陶瓦进程留着" />
+            <local:MyButton Grid.Column="4" Tag="act:tc-url" HorizontalAlignment="Stretch" Height="32" Padding="6,0,6,0" ColorType="Highlight" Text="复制连接地址" ToolTip="加入成功后，把连接地址填进游戏的服务器地址" />
+        </Grid>
+        <Grid Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <local:MyCheckBox Grid.Column="0" Tag="chk:tcauto" Text="启动启动器时自动启动" Checked="False" Margin="0,0,6,0" />
+            <local:MyCheckBox Grid.Column="1" Tag="chk:tcfill" Text="联机成功后自动填入服务器地址" Checked="False" />
+        </Grid>
+        <local:MyCheckBox Tag="chk:tcstop" Text="退出启动器时停止陶瓦联机" Checked="False" Margin="0,0,0,8" />
+        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
+                   Text="创建房间后，进单人存档按 ESC → 对局域网开放即可生成邀请码；加入成功后点「复制连接地址」填进服务器地址。" />
+"""
 
     link_card = _card("联机 · 陶瓦", _TC_CARD_XAML.replace("@@FG@@", _fg()))
 
@@ -1804,7 +1889,7 @@ def _zan_card():
              '                    Margin="0,0,0,6" Visibility="Collapsed"\n'
              '                    Source="' + S(url) + '" EnableCache="True"\n'
              '                    ToolTip="微信扫码赞赏；点击图片可在浏览器里放大" />\n'
-             '        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"\n'
+             '        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12" Margin="0,2,0,0"\n'
              '                   Text="微信扫码赞赏 · 点图片可放大查看" />\n')
     return _card("赞赏制作者", inner)
 
@@ -1913,6 +1998,10 @@ class Handler(BaseHTTPRequestHandler):
                 ok = _tc_start()
             elif action == "tc-stopcomp":
                 ok = _tc_detach()
+            elif action == "tc-autostart":
+                ok = _tc_autostart()
+            elif action == "tc-autostop":
+                ok = _tc_autostop()
             elif action == "tc-stop":
                 ok = _tc_stop()
             elif action == "tc-panel":
