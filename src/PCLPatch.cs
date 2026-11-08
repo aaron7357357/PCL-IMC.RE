@@ -10,6 +10,8 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Input;
 using System.Windows.Threading;
 
@@ -40,6 +42,9 @@ namespace PCLPatch
             public string LiveUrl;
             public string LiveBase;
             public string LiveLast;
+            public int LiveWalkLog;
+            public int TickLog;
+            public int ImgLog;
         }
 
         private static readonly Dictionary<object, State> States = new Dictionary<object, State>();
@@ -76,6 +81,8 @@ namespace PCLPatch
                     States[page] = st;
 
                     int ms = ReadIntervalMs();
+                    LoadWindowIcon();   // 先准备好窗口图标，tick 里再套上去
+                    // ShowSplash(st);  // 加载画面已改为直接替换 exe 内嵌图标，这里不再需要
                     Log(st, "install: interval=" + ms + "ms, LoadContent=" + (st.LoadContent != null)
                         + ", SettingsGet=" + (st.SettingsGet != null)
                         + ", ArgumentReplace=" + (st.ArgumentReplace != null)
@@ -131,10 +138,181 @@ namespace PCLPatch
             catch { return null; }
         }
 
+        private static Window Splash;
+
+        /// <summary>启动闪屏：主窗口出来之前先显示图标，主窗口可见后自动关掉</summary>
+        private static void ShowSplash(State st)
+        {
+            try
+            {
+                Application app = Application.Current;
+                if (app == null || WindowIcon == null) return;
+                app.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Send,
+                    new Action(delegate
+                    {
+                        try
+                        {
+                            if (Splash != null) return;
+                            Window w = new Window();
+                            w.WindowStyle = WindowStyle.None;
+                            w.ResizeMode = ResizeMode.NoResize;
+                            w.AllowsTransparency = false;
+                            w.Background = new SolidColorBrush(Color.FromRgb(30, 42, 56));
+                            w.ShowInTaskbar = false;
+                            w.Topmost = true;
+                            w.Width = 320;
+                            w.Height = 210;
+                            w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+                            Border box = new Border();
+                            box.CornerRadius = new CornerRadius(14);
+                            box.Background = new SolidColorBrush(Color.FromArgb(240, 30, 42, 56));
+                            box.BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255));
+                            box.BorderThickness = new Thickness(1);
+
+                            StackPanel sp = new StackPanel();
+                            sp.VerticalAlignment = VerticalAlignment.Center;
+                            sp.HorizontalAlignment = HorizontalAlignment.Center;
+
+                            Image img = new Image();
+                            img.Source = WindowIcon;
+                            img.Width = 96;
+                            img.Height = 96;
+                            img.Margin = new Thickness(0, 0, 0, 10);
+                            sp.Children.Add(img);
+
+                            TextBlock t1 = new TextBlock();
+                            t1.Text = "PCL IMC.RE";
+                            t1.FontSize = 20;
+                            t1.FontWeight = FontWeights.Bold;
+                            t1.Foreground = Brushes.White;
+                            t1.HorizontalAlignment = HorizontalAlignment.Center;
+                            sp.Children.Add(t1);
+
+                            TextBlock t2 = new TextBlock();
+                            t2.Text = "正在启动…";
+                            t2.FontSize = 12;
+                            t2.Margin = new Thickness(0, 4, 0, 0);
+                            t2.Foreground = new SolidColorBrush(Color.FromArgb(190, 255, 255, 255));
+                            t2.HorizontalAlignment = HorizontalAlignment.Center;
+                            sp.Children.Add(t2);
+
+                            box.Child = sp;
+                            w.Content = box;
+                            w.Show();
+                            w.Activate();
+                            Splash = w;
+                            SplashStart = DateTime.Now;
+                            Log(st, "splash shown");
+                        }
+                        catch (Exception ex) { Log(st, "splash error: " + ex.Message); }
+                    }));
+            }
+            catch { }
+        }
+
+        private static void SwapLogoImage(Window w, string name)
+        {
+            try
+            {
+                Image img = FindImageByName(w, name);
+                if (img == null) return;
+                if (ReferenceEquals(img.Source, WindowIcon)) return;
+                img.Source = WindowIcon;
+                img.Stretch = Stretch.Uniform;
+                Log(null, "logo swapped: " + name);
+            }
+            catch { }
+        }
+
+        private static Image FindImageByName(DependencyObject el, string name)
+        {
+            if (el == null) return null;
+            Image img = el as Image;
+            if (img != null && img.Name == name) return img;
+            int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
+            for (int i = 0; i < n; i++)
+            {
+                Image r = FindImageByName(System.Windows.Media.VisualTreeHelper.GetChild(el, i), name);
+                if (r != null) return r;
+            }
+            return null;
+        }
+
+        private static DateTime SplashStart = DateTime.MinValue;
+
+        /// <summary>主页内容出来后再收掉闪屏（PCL 启动时主窗口会先显示加载图标，
+        /// 那时还不能关，否则会闪一下旧图标）</summary>
+        private static void HideSplashIfReady(State st)
+        {
+            try
+            {
+                if (Splash == null) return;
+                bool ready = false;
+                try
+                {
+                    if (st != null && st.Page != null && st.PanCustom != null)
+                    {
+                        Panel host = st.PanCustom.GetValue(st.Page) as Panel;
+                        if (host != null && host.Children.Count > 0) ready = true;
+                    }
+                }
+                catch { }
+                double age = (DateTime.Now - SplashStart).TotalSeconds;
+                if (age < 1.2) return;
+                if (!ready && age < 12) return;
+                Splash.Close();
+                Splash = null;
+                Log(st, "splash closed");
+            }
+            catch { }
+        }
+
+        /// <summary>把窗口左上角 / 任务栏图标换成本项目的图标（PCL 的窗口图标来自 WPF 内嵌资源，
+        /// 改 exe 资源不会生效，只能在运行时替换）</summary>
+        private static void ApplyWindowIcon()
+        {
+            try
+            {
+                if (WindowIcon == null) return;
+                Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                if (w == null) return;
+                if (!ReferenceEquals(w.Icon, WindowIcon)) w.Icon = WindowIcon;
+                // PCL 启动加载画面显示的是标题 Logo 图片，一起换掉
+                SwapLogoImage(w, "ImgTitle");
+                SwapLogoImage(w, "ImageTitleLogo");
+            }
+            catch { }
+        }
+
+        private static System.Windows.Media.ImageSource WindowIcon;
+
+        private static void LoadWindowIcon()
+        {
+            try
+            {
+                Stream s = typeof(Bootstrap).Assembly.GetManifestResourceStream("PCLPatch.icon.ico");
+                if (s == null) return;
+                using (s)
+                {
+                    System.Drawing.Icon ico = new System.Drawing.Icon(s, 256, 256);
+                    WindowIcon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                        ico.Handle, Int32Rect.Empty,
+                        System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+                    ico.Dispose();
+                }
+            }
+            catch { }
+        }
+
         private static void OnTick(State st)
         {
             try
             {
+                if (st.TickLog < 3) { st.TickLog++; Log(st, "tick#" + st.TickLog + " page=" + (st.Page != null) + " vis=" + (st.Page != null && ((UIElement)st.Page).IsVisible)); }
+                HideSplashIfReady(st);
+                if (st.ImgLog < 2) { st.ImgLog++; DumpImages(st); }
+                ApplyWindowIcon();
                 if (st.Page == null || !((UIElement)st.Page).IsVisible) return;
 
                 // 毛玻璃处理要在任何模式（联网 / 本地文件 / 预设）下都跑一遍，
@@ -148,6 +326,10 @@ namespace PCLPatch
 
                 object typeValue = GetSetting(st, "UiCustomType");
                 if (!(typeValue is int) || (int)typeValue != 2) return;
+                // live 通道已经在按 live.json 改文字了。如果这里再拿整页 XAML 合并一遍，
+                // 会把刚写进去的实时数据又覆盖回占位文字（页面里写死的是“正在连接服务器……”），
+                // 表现就是主页一直停在占位状态。有 live 通道时就不跑整页刷新。
+                if (st.LiveUrl != null) return;
                 object urlValue = GetSetting(st, "UiCustomNet");
                 string url = urlValue as string;
                 if (string.IsNullOrEmpty(url) || url.Trim().Length == 0) return;
@@ -179,7 +361,9 @@ namespace PCLPatch
             if (st.LiveUrl != null) return st.LiveUrl;
             object v = GetSetting(st, "UiCustomNet");
             string s = v as string;
-            if (string.IsNullOrEmpty(s)) return null;
+            // 预设模式下 UiCustomNet 可能没被填（或者被 PCL 清空），
+            // 这时直接退回本地服务的固定地址，保证 live.json 这条通道永远能连上
+            if (string.IsNullOrEmpty(s)) s = "http://127.0.0.1:8848/motd.xaml";
             s = s.Trim();
             int cut = s.LastIndexOf('/');
             if (cut <= 7) return null;
@@ -193,13 +377,14 @@ namespace PCLPatch
             try
             {
                 string text = Fetch(url);
+                if (st.LiveWalkLog < 2) { st.LiveWalkLog++; Log(st, "live fetch " + url + " len=" + (text == null ? -1 : text.Length)); }
                 if (string.IsNullOrEmpty(text)) return;
                 st.LiveLast = text;
                 // 每次都套用：按 F5 后 PCL 会重建控件，新控件需要重新填一遍实时值
                 ((DispatcherObject)st.Page).Dispatcher.BeginInvoke(DispatcherPriority.Background,
                     new Action(delegate { ApplyLive(st, text); }));
             }
-            catch { }
+            catch (Exception ex) { Log(st, "live fetch error: " + ex.Message); }
             finally
             {
                 Interlocked.Exchange(ref st.LiveBusy, 0);
@@ -213,10 +398,16 @@ namespace PCLPatch
                 Dictionary<string, string> d = ParseFlatJson(json);
                 if (d == null || d.Count == 0) return;
                 Panel host = st.PanCustom.GetValue(st.Page) as Panel;
-                if (host == null) return;
+                if (host == null) { Log(st, "live: PanCustom is not Panel"); return; }
                 string status;
                 if (!d.TryGetValue("status", out status)) status = "";
-                WalkLive(host, d, status);
+                int touched = WalkLive(host, d, status);
+                if (st.LiveWalkLog < 3)
+                {
+                    st.LiveWalkLog++;
+                    Log(st, "live walk: host=" + (host == null ? "null" : host.GetType().Name)
+                        + " nodes=" + touched + " keys=" + d.Count);
+                }
             }
             catch (Exception ex)
             {
@@ -224,24 +415,135 @@ namespace PCLPatch
             }
         }
 
-        private static void WalkLive(DependencyObject el, Dictionary<string, string> d, string status)
+        /// <summary>调试用：把可视树里所有 Image 的来源和尺寸打出来，找出 PCL 启动加载画面的那张图</summary>
+        private static void DumpImages(State st)
+        {
+            try
+            {
+                Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                if (w == null) { Log(st, "img: no main window"); return; }
+                DumpImagesWalk(st, w);
+            }
+            catch (Exception ex) { Log(st, "img error: " + ex.Message); }
+        }
+
+        private static void DumpImagesWalk(State st, DependencyObject el)
         {
             if (el == null) return;
+            Image img = el as Image;
+            if (img != null)
+            {
+                string uri = "null";
+                if (img.Source != null)
+                {
+                    uri = img.Source.GetType().Name;
+                    BitmapImage bi = img.Source as BitmapImage;
+                    if (bi != null && bi.UriSource != null) uri += " " + bi.UriSource.ToString();
+                    BitmapFrame bf = img.Source as BitmapFrame;
+                    if (bf != null) uri += " frame " + (bf.Decoder == null ? "" : bf.Decoder.ToString());
+                    if (img.Source != null) uri += " w=" + (int)img.Source.Width;
+                }
+                Log(st, "img: " + uri + "  " + (int)img.ActualWidth + "x" + (int)img.ActualHeight
+                     + " name=" + (img.Name == null ? "" : img.Name));
+            }
+            int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
+            for (int i = 0; i < n; i++)
+                DumpImagesWalk(st, System.Windows.Media.VisualTreeHelper.GetChild(el, i));
+        }
+
+        private static int WalkLive(DependencyObject el, Dictionary<string, string> d, string status)
+        {
+            if (el == null) return 0;
+            int hit = 0;
             FrameworkElement fe = el as FrameworkElement;
             if (fe != null)
             {
                 string tag = fe.Tag as string;
-                if (tag != null && tag.StartsWith("act:", StringComparison.Ordinal))
+                // Tag 可以用 | 组合多条指令，例如 "act:tc-stop|dis:tcrun"
+                string actPart = null, inPart = null, livePart = null, chkPart = null;
+                if (tag != null && tag.IndexOf('|') >= 0)
                 {
-                    HookAction(fe, tag);
+                    foreach (string part in tag.Split('|'))
+                    {
+                        if (part.StartsWith("act:", StringComparison.Ordinal)) actPart = part;
+                        else if (part.StartsWith("in:", StringComparison.Ordinal)) inPart = part;
+                        else if (part.StartsWith("live:", StringComparison.Ordinal)) livePart = part;
+                        else if (part.StartsWith("chk:", StringComparison.Ordinal)) chkPart = part;
+                        else if (part.StartsWith("dis:", StringComparison.Ordinal))
+                        {
+                            // 按键值把控件置灰：data 里对应项为 "1" 才可用
+                            string dk = part.Substring(4);
+                            string dv;
+                            bool on = d.TryGetValue(dk, out dv) && dv == "1";
+                            if (fe.IsEnabled != on) fe.IsEnabled = on;
+                        }
+                    }
                 }
-                else if (tag != null && tag.StartsWith("in:", StringComparison.Ordinal))
+                else
                 {
-                    HookInput(fe, tag);
+                    if (tag != null && tag.StartsWith("act:", StringComparison.Ordinal)) actPart = tag;
+                    else if (tag != null && tag.StartsWith("in:", StringComparison.Ordinal)) inPart = tag;
+                    else if (tag != null && tag.StartsWith("live:", StringComparison.Ordinal)) livePart = tag;
+                    else if (tag != null && tag.StartsWith("chk:", StringComparison.Ordinal)) chkPart = tag;
                 }
-                else if (tag != null && tag.StartsWith("live:", StringComparison.Ordinal))
+
+                if (chkPart != null)
                 {
-                    string key = tag.Substring(5);
+                    CheckBox cb = fe as CheckBox;
+                    if (cb == null)
+                    {
+                        // PCL.MyCheckBox 不是 WPF 的 CheckBox，用反射设 Checked
+                        string ck0 = chkPart.Substring(4);
+                        string cv0;
+                        bool on0 = d.TryGetValue(ck0, out cv0) && cv0 == "1";
+                        System.Reflection.PropertyInfo pc = fe.GetType().GetProperty("Checked");
+                        if (pc != null && pc.CanWrite)
+                        {
+                            object cur0 = pc.GetValue(fe, null);
+                            if (!Equals(cur0, on0)) pc.SetValue(fe, on0, null);
+                            if (CheckHooked.Add(fe))
+                            {
+                                System.Reflection.EventInfo ei = fe.GetType().GetEvent("Click");
+                                if (ei != null)
+                                {
+                                    Action h = null;
+                                    h = delegate { try { RunAction(fe, "tc-tog:" + ck0); } catch (Exception ex) { Log(null, "chk err: " + ex.Message); } };
+                                    ei.AddEventHandler(fe, h);
+                                }
+                            }
+                            hit++;
+                        }
+                    }
+                    if (cb != null)
+                    {
+                        string ck = chkPart.Substring(4);
+                        string cv;
+                        bool on = d.TryGetValue(ck, out cv) && cv == "1";
+                        if (cb.IsChecked != on) cb.IsChecked = on;
+                        if (CheckHooked.Add(cb))
+                        {
+                            cb.Click += delegate
+                            {
+                                try { RunAction(cb, "tc-tog:" + ck); }
+                                catch (Exception ex) { Log(null, "chk error: " + ex.Message); }
+                            };
+                        }
+                        hit++;
+                    }
+                    else if (actPart == null && inPart == null) { }
+                }
+                if (actPart != null)
+                {
+                    HookAction(fe, actPart);
+                }
+                else if (inPart != null)
+                {
+                    HookInput(fe, inPart);
+                }
+                else if (livePart != null)
+                {
+                    hit++;
+                    string key = livePart.Substring(5);
                     if (key == "on" || key == "off")
                     {
                         bool show = (key == "on") ? (status == "on") : (status == "off");
@@ -254,14 +556,31 @@ namespace PCLPatch
                         if (d.TryGetValue(key, out val) && val != null)
                         {
                             TextBlock tb = fe as TextBlock;
-                            if (tb != null && tb.Text != val) tb.Text = val;
+                            if (tb != null) { if (tb.Text != val) tb.Text = val; }
+                            else
+                            {
+                                // 按钮也能被实时数据改文字（用来显示开关状态）
+                                ContentControl cc = fe as ContentControl;
+                                if (cc != null && !Equals(cc.Content, val)) { cc.Content = val; }
+                                else if (cc == null)
+                                {
+                                    // PCL 的 MyButton 不是 ContentControl，用 Text 属性
+                                    System.Reflection.PropertyInfo pi = fe.GetType().GetProperty("Text");
+                                    if (pi != null && pi.CanWrite)
+                                    {
+                                        object cur = pi.GetValue(fe, null);
+                                        if (!Equals(cur, val)) pi.SetValue(fe, val, null);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
             int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
             for (int i = 0; i < n; i++)
-                WalkLive(System.Windows.Media.VisualTreeHelper.GetChild(el, i), d, status);
+                hit += WalkLive(System.Windows.Media.VisualTreeHelper.GetChild(el, i), d, status);
+            return hit;
         }
 
         /// <summary>只解析一层 { "key": "value", ... } 的小 JSON（服务端也是我们自己写的）</summary>
@@ -345,15 +664,71 @@ namespace PCLPatch
             if (fe is ButtonBase) return;
             if (!ActionHooked.Add(fe)) return;
             string action = tag.Substring(4);
+            // 赞赏码默认收起：MyImage 的 Visibility 会被 PCL 在加载时改回 Visible，
+            // 所以由补丁在首次挂接时强制折叠一次，之后再交给「展开赞赏码」按钮切换。
+            if (action == "zan-open") fe.Visibility = Visibility.Collapsed;
             MouseButtonEventHandler mb = delegate(object s, MouseButtonEventArgs e)
             {
-                try { RunAction(fe, action); }
+                try
+                {
+                    if (action == "zan-toggle") { ToggleZan(fe); return; }
+                    if (action == "zan-open") { OpenZan(fe); return; }
+                    if (action == "tc-stop")
+                    {
+                        // 关闭联机 = 直接杀掉陶瓦进程，会断掉房间里所有人，先确认一次
+                        MessageBoxResult mr = MessageBox.Show(
+                            "停止陶瓦联机会断开当前房间内的所有连接。\n如果还有其他启动器正在使用陶瓦，也会一并停止。",
+                            "停止陶瓦联机", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+                        if (mr != MessageBoxResult.OK) return;
+                    }
+                    RunAction(fe, action);
+                }
                 catch (Exception ex) { Log(null, "action error: " + ex.Message); }
             };
             fe.AddHandler(UIElement.MouseLeftButtonUpEvent, mb, true);
         }
 
+        /// <summary>赞赏码折叠：点一下按钮，切换那张图片的显示 / 隐藏</summary>
+        private static void ToggleZan(FrameworkElement fe)
+        {
+            State st = FindState(fe);
+            if (st == null) return;
+            Panel host = st.PanCustom.GetValue(st.Page) as Panel;
+            if (host == null) return;
+            FrameworkElement img = FindByTag(host, "act:zan-open");
+            if (img == null) return;
+            img.Visibility = img.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        /// <summary>点赞赏码：在浏览器里打开原图（等于放大查看）</summary>
+        private static void OpenZan(FrameworkElement fe)
+        {
+            State st = FindState(fe);
+            string baseUrl = (st != null && st.LiveBase != null) ? st.LiveBase : "http://127.0.0.1:8848/";
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(baseUrl + "zan/zan.jpg") { UseShellExecute = true }); }
+            catch (Exception ex) { Log(st, "open zan error: " + ex.Message); }
+        }
+
+        private static FrameworkElement FindByTag(DependencyObject root, string tag)
+        {
+            if (root == null) return null;
+            FrameworkElement fe = root as FrameworkElement;
+            if (fe != null)
+            {
+                string t = fe.Tag as string;
+                if (t != null && t == tag) return fe;
+            }
+            int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                FrameworkElement r = FindByTag(System.Windows.Media.VisualTreeHelper.GetChild(root, i), tag);
+                if (r != null) return r;
+            }
+            return null;
+        }
+
         private static readonly HashSet<object> ActionHooked = new HashSet<object>();
+        private static readonly HashSet<object> CheckHooked = new HashSet<object>();
 
         /// <summary>
         /// 主页上的输入框（Tag="in:xxx"）：记下引用，点按钮时直接读它的文字。
@@ -392,6 +767,27 @@ namespace PCLPatch
                     return;
                 }
                 url += "&code=" + Uri.EscapeDataString(code);
+            }
+            else if (action == "tc-url")
+            {
+                // 复制连接地址：加入房间成功后陶瓦会给出备用地址，直接填进游戏服务器地址
+                if (st != null && st.LiveLast != null)
+                {
+                    string u = ExtractJsonString(st.LiveLast, "tcurl");
+                    if (!string.IsNullOrEmpty(u))
+                    {
+                        try { Clipboard.SetText(u); } catch { }
+                        Log(st, "action: 已复制连接地址 " + u);
+                        return;
+                    }
+                }
+                Log(st, "action: 还没有连接地址（先加入一个房间）");
+                return;
+            }
+            if (action == "tc-host" || action == "tc-join" || action == "tc-detach")
+            {
+                string nick = ReadInput("nick");
+                if (!string.IsNullOrEmpty(nick)) url += "&nick=" + Uri.EscapeDataString(nick);
             }
             else if (action == "tc-copy")
             {
@@ -560,8 +956,8 @@ namespace PCLPatch
                 int guard = 0;
                 while (content.Contains("xmlns") && guard++ < 20)
                 {
-                    content = Regex.Replace(content, "xmlns[^\"']*(\"|')[^\"']*(\"|')", "")
-                                   .Replace("xmlns", "");
+                    content = Regex.Replace(content,
+                        "xmlns[^ >]*=\"[^\"]*\"|xmlns[^ >]*='[^']*'", "").Replace("xmlns", "");
                 }
                 content = XamlPrefix + content + "</StackPanel>";
                 return st.GetObjectFromXML.Invoke(null, new object[] { content });
