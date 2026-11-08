@@ -87,6 +87,10 @@ def _background_refresh():
                 _tc_autostop_watch()
             except Exception:
                 pass
+            try:
+                _tc_autofill_watch()
+            except Exception:
+                pass
         if time.time() - last_servers > 30:          # 顺手把 imc 补进多人游戏列表
             last_servers = time.time()
             try:
@@ -770,6 +774,70 @@ def _servers_dat_sync():
             pass
 
 
+def _servers_dat_put(name, ip):
+    """把一个服务器写进所有 servers.dat（已有同名同地址就跳过）；返回写入份数"""
+    ip = (ip or "").strip()
+    if not ip:
+        return 0
+    if _game_running():
+        return 0
+    n = 0
+    for path in _servers_dat_paths():
+        try:
+            root, packed = _servers_dat_read(path)
+        except Exception:
+            continue
+        tag = root.get("servers")
+        items = []
+        if tag and tag[0] == 9 and isinstance(tag[1], tuple) and tag[1][0] == 10:
+            items = list(tag[1][1])
+        hit = False
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            ipv = it.get("ip")
+            if ipv and ipv[0] == 8 and str(ipv[1]).strip().lower() == ip.lower():
+                hit = True
+                if it.get("name") and it["name"][0] == 8 and str(it["name"][1]) != name:
+                    it["name"] = (8, name)
+                break
+        if hit:
+            continue
+        items.append({"name": (8, name), "ip": (8, ip), "acceptTextures": (1, 1)})
+        root["servers"] = (9, (10, items))
+        try:
+            _servers_dat_write(path, root, packed)
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+_tc_fill_last = {"url": ""}
+
+
+def _tc_autofill_watch():
+    """设置开了「联机成功后自动填入服务器地址」时，把陶瓦给的连接地址写进多人游戏列表"""
+    try:
+        _tc_cfg_load()
+        if not _tc_cfg.get("autofill"):
+            return
+        st = _tc_state()
+        if not isinstance(st, dict):
+            return
+        if str(st.get("state", "")) != "guest-ok":
+            return
+        url = (st.get("url") or "").strip()
+        if not url or url == _tc_fill_last["url"]:
+            return
+        _tc_fill_last["url"] = url
+        n = _servers_dat_put("陶瓦联机", url)
+        if n:
+            _tc_log("已把陶瓦联机地址写入 %d 份 servers.dat：%s" % (n, url))
+    except Exception:
+        pass
+
+
 def _sort_versions(names):
     """MC 版本号倒序在前，整合包/自定义版本名排在后面"""
     def key(n):
@@ -1025,6 +1093,8 @@ def _live_values(st):
     return {"status": status, "motd": motd, "info": info, "plist": plist,
             "tc": _tc_text(), "tc2": _tc_text2(), "tccode": _tc_code(_tc_state() or {}),
             "tcurl": _tc_url(_tc_state() or {}),
+            "tccodeok": "1" if _tc_code(_tc_state() or {}) else "0",
+            "tcurlok": "1" if _tc_url(_tc_state() or {}) else "0",
             "tcrun": "1" if _tc_running() else "0",
             "tcenable": "1" if _tc_cfg_load()["enable"] else "0",
             "tcauto": "1" if _tc_cfg_load()["autostart"] else "0",
@@ -1495,6 +1565,12 @@ def _tc_fire(path):
     threading.Thread(target=run, daemon=True).start()
 
 
+def _tc_enabled():
+    """「启用陶瓦联机」关掉后，所有陶瓦动作都不做"""
+    _tc_cfg_load()
+    return bool(_tc_cfg.get("enable"))
+
+
 def _tc_nick_q(player):
     """陶瓦用 query 参数 player 传联机昵称（留空就用它的默认昵称）"""
     p = (player or "").strip()
@@ -1502,6 +1578,8 @@ def _tc_nick_q(player):
 
 
 def _tc_host(player=""):
+    if not _tc_enabled():
+        return False
     if not _tc_start():
         return False
     _tc_fire("/state/scanning" + _tc_nick_q(player))
@@ -1509,6 +1587,8 @@ def _tc_host(player=""):
 
 
 def _tc_join(code, player=""):
+    if not _tc_enabled():
+        return False
     if not _tc_start():
         return False
     # 如果现在正在开房（host-*），先退回空闲，否则陶瓦会忽略加入请求
@@ -1582,10 +1662,33 @@ def _tc_autostop_watch():
         pass
 
 
+def _tc_setpath(path):
+    """手动指定 terracotta.exe 路径（浏览按钮）"""
+    _tc_cfg_load()
+    p = (path or "").strip().strip('"')
+    if not p or not os.path.isfile(p):
+        return False
+    _tc_cfg["path"] = p
+    _tc_cfg_save()
+    _tc_port_forget()
+    return True
+
+
+def _tc_fillnow():
+    """立即把当前连接地址写进多人游戏列表（用于验证自动填入是否可用）"""
+    st = _tc_state() or {}
+    url = _tc_url(st)
+    if not url:
+        return False
+    n = _servers_dat_put("陶瓦联机", url)
+    _tc_log("手动填入：写入 %d 份 servers.dat，地址 %s" % (n, url))
+    return n > 0
+
+
 def _tc_autostart():
     """PCL 启动时调用：如果开了「启动启动器时自动启动」就把陶瓦拉起来"""
     _tc_cfg_load()
-    if not _tc_cfg.get("autostart"):
+    if not _tc_cfg.get("enable") or not _tc_cfg.get("autostart"):
         return False
     if _tc_running():
         return True
@@ -1665,6 +1768,8 @@ def _tc_stop():
 
 def _tc_text():
     """给主页显示的一行状态"""
+    if not _tc_enabled():
+        return "已关闭（勾上「启用陶瓦联机」才能用）"
     if _tc_install_busy:
         return _tc_install_msg or "正在安装陶瓦联机……"
     if not _tc_exe():
@@ -1785,11 +1890,14 @@ def build_page():
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Tag="live:tcpath" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                        VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF6B7885" FontSize="12"
                        Text="未找到 terracotta.exe" />
-            <local:MyButton Grid.Column="1" Tag="act:tc-detect" Height="30" Padding="10,0,10,0"
+            <local:MyButton Grid.Column="1" Tag="act:tc-pick" Height="30" Margin="0,0,6,0" Padding="10,0,10,0"
+                            ColorType="Highlight" Text="浏览" ToolTip="手动选择 terracotta.exe" />
+            <local:MyButton Grid.Column="2" Tag="act:tc-detect" Height="30" Padding="10,0,10,0"
                             ColorType="Highlight" Text="自动检测" ToolTip="在 PCL 的陶瓦目录里找 terracotta.exe" />
         </Grid>
         <local:MyTextBox Tag="in:nick" Height="32" Margin="0,0,0,8" FontSize="13"
@@ -1806,9 +1914,9 @@ def build_page():
             <local:MyTextBox Grid.Column="0" Tag="in:code" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
                              FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"
                              HintText="U/XXXX-XXXX-XXXX-XXXX" />
-            <local:MyButton Grid.Column="1" Tag="act:tc-join" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
+            <local:MyButton Grid.Column="1" Tag="act:tc-join|dis:tcenable" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
                             Padding="10,0,10,0" ColorType="Highlight" Text="加入房间" />
-            <local:MyButton Grid.Column="2" Tag="act:tc-copy" HorizontalAlignment="Stretch" Height="32"
+            <local:MyButton Grid.Column="2" Tag="act:tc-copy|dis:tccodeok" HorizontalAlignment="Stretch" Height="32"
                             Padding="10,0,10,0" ColorType="Highlight" Text="复制邀请码" />
         </Grid>
         <Grid Margin="0,0,0,8">
@@ -1819,11 +1927,11 @@ def build_page():
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <local:MyButton Grid.Column="0" Tag="act:tc-start" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="启动组件" ToolTip="只启动陶瓦，不进房间" />
+            <local:MyButton Grid.Column="0" Tag="act:tc-start|dis:tcenable" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="启动组件" ToolTip="只启动陶瓦，不进房间" />
             <local:MyButton Grid.Column="1" Tag="act:tc-stop|dis:tcrun" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="停止组件" ToolTip="结束房间并退出陶瓦进程" />
-            <local:MyButton Grid.Column="2" Tag="act:tc-host" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="创建房间" ToolTip="启动陶瓦并等待你开放局域网世界" />
-            <local:MyButton Grid.Column="3" Tag="act:tc-detach" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="断开房间" ToolTip="只退出房间，陶瓦进程留着" />
-            <local:MyButton Grid.Column="4" Tag="act:tc-url" HorizontalAlignment="Stretch" Height="32" Padding="6,0,6,0" ColorType="Highlight" Text="复制连接地址" ToolTip="加入成功后，把连接地址填进游戏的服务器地址" />
+            <local:MyButton Grid.Column="2" Tag="act:tc-host|dis:tcenable" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="创建房间" ToolTip="启动陶瓦并等待你开放局域网世界" />
+            <local:MyButton Grid.Column="3" Tag="act:tc-detach|dis:tcenable" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="断开房间" ToolTip="只退出房间，陶瓦进程留着" />
+            <local:MyButton Grid.Column="4" Tag="act:tc-url|dis:tcurlok" HorizontalAlignment="Stretch" Height="32" Padding="6,0,6,0" ColorType="Highlight" Text="复制连接地址" ToolTip="加入成功后，把连接地址填进游戏的服务器地址" />
         </Grid>
         <Grid Margin="0,0,0,4">
             <Grid.ColumnDefinitions>
@@ -1998,6 +2106,10 @@ class Handler(BaseHTTPRequestHandler):
                 ok = _tc_start()
             elif action == "tc-stopcomp":
                 ok = _tc_detach()
+            elif action == "tc-setpath":
+                ok = _tc_setpath((q.get("path") or [""])[0])
+            elif action == "tc-fillnow":
+                ok = _tc_fillnow()
             elif action == "tc-autostart":
                 ok = _tc_autostart()
             elif action == "tc-autostop":
