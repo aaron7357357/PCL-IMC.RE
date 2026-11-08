@@ -1470,11 +1470,8 @@ namespace PCLPatch
             {
                 if (GlassAll)
                 {
-                    if (!GlassOrigin.ContainsKey(key))
-                    {
-                        GlassOrigin[key] = b.Background;
-                        b.Background = null;   // 左边栏整块底板直接抠掉，背景图才透得出来
-                    }
+                    if (!GlassOrigin.ContainsKey(key)) GlassOrigin[key] = b.Background;
+                    b.Background = null;   // 左边栏整块底板直接抠掉，背景图才透得出来
                 }
                 else if (GlassOrigin.ContainsKey(key))
                 {
@@ -1491,9 +1488,8 @@ namespace PCLPatch
             {
                 if (GlassAll)
                 {
-                    if (!GlassOrigin.ContainsKey(key))
+                    if (!GlassOrigin.ContainsKey(key)) GlassOrigin[key] = b.Background;
                     {
-                        GlassOrigin[key] = b.Background;
                         b.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
                         TryLog("glass border: " + (b.Name ?? "") + " " + (int)b.ActualWidth + "x" + (int)b.ActualHeight);
                     }
@@ -1554,11 +1550,8 @@ namespace PCLPatch
                         {
                             if (GlassAll)
                             {
-                                if (!GlassOrigin.ContainsKey(el))
-                                {
-                                    GlassOrigin[el] = gsb;
-                                    bgp.SetValue(el, new SolidColorBrush(Color.FromArgb(0x9C, 0xFF, 0xFF, 0xFF)), null);
-                                }
+                                if (!GlassOrigin.ContainsKey(el)) GlassOrigin[el] = gsb;
+                                bgp.SetValue(el, new SolidColorBrush(Color.FromArgb(0x9C, 0xFF, 0xFF, 0xFF)), null);
                             }
                             else if (GlassOrigin.ContainsKey(el))
                             {
@@ -1578,11 +1571,8 @@ namespace PCLPatch
                     {
                         if (GlassAll)
                         {
-                            if (!GlassOrigin.ContainsKey(el))
-                            {
-                                GlassOrigin[el] = pb;
-                                anyPanel.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
-                            }
+                            if (!GlassOrigin.ContainsKey(el)) GlassOrigin[el] = pb;
+                            anyPanel.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
                         }
                         else if (GlassOrigin.ContainsKey(el))
                         {
