@@ -62,8 +62,9 @@ PCL2 的自定义主页是静态 XAML，数字不会自己变。这个项目把�
 
 ## 下载
 
-- **蓝奏云**：<https://wwbrg.lanzouv.com/ikExC4f4b0hc> 密码 `imc.re`
-  （被微信/QQ 拦截时把域名换成 `lanzoup.com` 或 `lanzoux.com`）
+- **GitHub Release（推荐）**：<https://github.com/aaron7357357/PCL-IMC.RE/releases/latest>
+  下载 `PCL.IMC.RE.zip` 即可，无需密码
+- 仓库源码：<https://github.com/aaron7357357/PCL-IMC.RE>
 
 ## 文件说明
 
