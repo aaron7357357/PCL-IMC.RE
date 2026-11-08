@@ -2273,7 +2273,7 @@ def build_page():
         )
     qq_card = _card("加入 QQ 群", "".join(qq_rows))
 
-    return banner + status_card + link_card + _versions_card() + pl_card + qq_card + _zan_card() + _author_card() + _about_card()
+    return banner + status_card + _versions_card() + link_card + pl_card + qq_card + _zan_card() + _author_card() + _about_card()
 
 
 def _zan_card():
