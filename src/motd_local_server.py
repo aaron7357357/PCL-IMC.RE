@@ -948,12 +948,20 @@ def _version_row(name):
 
 
 def _launch_block():
-    """状态卡里的进服区：只剩「服务器官网」一个按钮，横向拉满整行"""
+    """状态卡里的进服区：服务器官网 + 内存优化 并排，只占一行高度"""
     return ('        <Grid Margin="0,2,0,0">\n'
-            '            <local:MyButton HorizontalAlignment="Stretch" Height="35" Padding="13,0,13,0" ColorType="Highlight"\n'
+            '            <Grid.ColumnDefinitions>\n'
+            '                <ColumnDefinition Width="*" />\n'
+            '                <ColumnDefinition Width="Auto" />\n'
+            '            </Grid.ColumnDefinitions>\n'
+            '            <local:MyButton Grid.Column="0" HorizontalAlignment="Stretch" Height="35" Padding="13,0,13,0" ColorType="Highlight"\n'
             '                        Text="服务器官网" EventType="打开网页" EventData="' + WEBSITE + '"\n'
             '                        ToolTip="在浏览器打开 IMC 服务器官网 ' + WEBSITE + '" />\n'
-            '        </Grid>\n')
+            '            <local:MyButton Grid.Column="1" Tag="act:memopt" Margin="8,0,0,0" Height="35" Padding="12,0,12,0" ColorType="Highlight"\n'
+            '                        Text="内存优化" ToolTip="清工作集 / 刷已修改页 / 清待命列表，和百宝箱里的「内存优化」一个效果" />\n'
+            '        </Grid>\n'
+            '        <TextBlock Tag="live:memtext" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7885" FontSize="11"\n'
+            '                   Text="点一下「内存优化」释放被缓存占住的物理内存" />\n')
 
 
 def _versions_card():
@@ -1577,6 +1585,16 @@ def _tc_port():
         if _tc_probe(p):
             port = p
             break
+    if port is None:
+        # 端口文件可能被清掉、或者陶瓦是别的启动器拉起来的：
+        # 直接问陶瓦进程自己在听哪个端口（ctypes 查表，不开子进程）
+        for pid in _proc_pids("terracotta.exe"):
+            for p in _tcp_listen_ports(pid):
+                if _tc_probe(p):
+                    port = p
+                    break
+            if port:
+                break
     _tc_port_cache[0] = port
     _tc_port_cache[1] = now
     _tc_port_cache[2] = True
@@ -1696,9 +1714,86 @@ def _tc_state():
     return res
 
 
+def _proc_pids(name):
+    """按进程名拿 PID（纯 ctypes 快照，不开子进程、不闪黑窗）"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PE32(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD),
+                        ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                        ("szExeFile", ctypes.c_char * 260)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)
+        if snap == -1:
+            return []
+        out = []
+        try:
+            e = PE32()
+            e.dwSize = ctypes.sizeof(e)
+            if not k32.Process32First(snap, ctypes.byref(e)):
+                return []
+            want = name.lower()
+            while True:
+                if e.szExeFile.decode("mbcs", "replace").lower() == want:
+                    out.append(int(e.th32ProcessID))
+                if not k32.Process32Next(snap, ctypes.byref(e)):
+                    break
+        finally:
+            k32.CloseHandle(snap)
+        return out
+    except Exception:
+        return []
+
+
+def _tcp_listen_ports(pid):
+    """这个进程在 127.0.0.1 上监听的端口（ctypes 查 TCP 表，不用 netstat）"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ROW(ctypes.Structure):
+            _fields_ = [("dwState", wintypes.DWORD), ("dwLocalAddr", wintypes.DWORD),
+                        ("dwLocalPort", wintypes.DWORD), ("dwRemoteAddr", wintypes.DWORD),
+                        ("dwRemotePort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD)]
+
+        ip = ctypes.WinDLL("iphlpapi")
+        TCP_TABLE_OWNER_PID_LISTENING = 3
+        AF_INET = 2
+        size = wintypes.DWORD(0)
+        ip.GetExtendedTcpTable(None, ctypes.byref(size), False, AF_INET,
+                               TCP_TABLE_OWNER_PID_LISTENING, 0)
+        if size.value <= 4:
+            return []
+        buf = ctypes.create_string_buffer(size.value)
+        if ip.GetExtendedTcpTable(buf, ctypes.byref(size), False, AF_INET,
+                                  TCP_TABLE_OWNER_PID_LISTENING, 0) != 0:
+            return []
+        n = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0]
+        rows = ctypes.cast(ctypes.byref(buf, 4), ctypes.POINTER(ROW * n)).contents
+        out = []
+        for row in rows:
+            if row.dwOwningPid != pid:
+                continue
+            port = ((row.dwLocalPort & 0xFF) << 8) | ((row.dwLocalPort >> 8) & 0xFF)
+            if 0 < port < 65536:
+                out.append(port)
+        return out
+    except Exception:
+        return []
+
 def _tc_running():
-    # 只探端口，不问 tasklist：主页每秒刷新都会调到这里，绝不能启动控制台程序
-    return _tc_port() is not None
+    # 先看端口；端口没找到但进程确实在（陶瓦是别的启动器拉起来的、端口文件被清掉），
+    # 也算在跑，否则会出现「进程明明在跑，主页写未启动、停止按钮还点不了」
+    if _tc_port() is not None:
+        return True
+    return bool(_proc_pids("terracotta.exe"))
 
 
 def _tc_start():
@@ -2090,14 +2185,6 @@ def build_page():
                         '                   Text="版本：—　在线：—" />\n'
                         + _launch_block())
 
-    # 内存优化卡：效果等同 PCL 百宝箱里的「内存优化」
-    mem_card = _card("内存优化",
-                     '        <local:MyButton Tag="act:memopt" Height="32" HorizontalAlignment="Left" Padding="16,0,16,0"\n'
-                     '                        ColorType="Highlight" Text="内存优化"\n'
-                     '                        ToolTip="清工作集、刷已修改页、清待命列表，和百宝箱里那个「内存优化」一个效果" />\n'
-                     '        <TextBlock Tag="live:memtext" TextWrapping="Wrap" Margin="0,8,0,0"\n'
-                     '                   ' + _fg() + ' FontSize="12" Text="点一下，释放被缓存占住的物理内存" />\n')
-
     # 在线玩家卡（标题固定，人数和名单在正文里实时更新）
     pl_card = _card("在线玩家",
                     '        <TextBlock Tag="live:plist" TextWrapping="Wrap" ' + _fg() + '\n'
@@ -2186,7 +2273,7 @@ def build_page():
         )
     qq_card = _card("加入 QQ 群", "".join(qq_rows))
 
-    return banner + status_card + mem_card + link_card + _versions_card() + pl_card + qq_card + _zan_card() + _author_card() + _about_card()
+    return banner + status_card + link_card + _versions_card() + pl_card + qq_card + _zan_card() + _author_card() + _about_card()
 
 
 def _zan_card():
