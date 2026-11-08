@@ -1393,6 +1393,8 @@ namespace PCLPatch
         private static bool GlassAll;
         private static bool GlassLoaded;
         private static readonly Dictionary<DependencyObject, Brush> GlassOrigin = new Dictionary<DependencyObject, Brush>();
+        private static readonly Dictionary<DependencyObject, bool> GlassAnimOrigin = new Dictionary<DependencyObject, bool>();
+        private static readonly Dictionary<DependencyObject, Visibility> GlassChromeOrigin = new Dictionary<DependencyObject, Visibility>();
         private static bool GlassSwitchDone;
         private static WeakReference GlassCardRef;
         private static int GlassTick;
@@ -1502,14 +1504,45 @@ namespace PCLPatch
                             if (!GlassOrigin.ContainsKey(el))
                             {
                                 GlassOrigin[el] = border.Background;
-                                SolidColorBrush b = new SolidColorBrush(Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF));
-                                border.Background = b;
+                                border.Background = new SolidColorBrush(Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF));
+                                // 关掉悬停动画：鼠标移上去卡片会被染成蓝色，透过半透明看很明显；
+                                // 阴影层也藏掉，否则它会盖在毛玻璃上面
+                                PropertyInfo anim = el.GetType().GetProperty("HasMouseAnimation");
+                                if (anim != null && anim.CanWrite)
+                                {
+                                    object av = anim.GetValue(el, null);
+                                    GlassAnimOrigin[el] = av is bool && (bool)av;
+                                    if (av is bool && (bool)av) anim.SetValue(el, false, null);
+                                }
+                                FieldInfo cf = el.GetType().GetField("_MainChrome", BindingFlags.Instance | BindingFlags.NonPublic);
+                                UIElement chrome = cf == null ? null : cf.GetValue(el) as UIElement;
+                                if (chrome != null)
+                                {
+                                    GlassChromeOrigin[el] = chrome.Visibility;
+                                    chrome.Visibility = Visibility.Collapsed;
+                                }
                             }
                         }
-                        else if (GlassOrigin.ContainsKey(el))
+                        else
                         {
-                            border.Background = GlassOrigin[el];
-                            GlassOrigin.Remove(el);
+                            if (GlassOrigin.ContainsKey(el))
+                            {
+                                border.Background = GlassOrigin[el];
+                                GlassOrigin.Remove(el);
+                            }
+                            PropertyInfo anim2 = el.GetType().GetProperty("HasMouseAnimation");
+                            if (anim2 != null && anim2.CanWrite && GlassAnimOrigin.ContainsKey(el))
+                            {
+                                anim2.SetValue(el, GlassAnimOrigin[el], null);
+                                GlassAnimOrigin.Remove(el);
+                            }
+                            if (GlassChromeOrigin.ContainsKey(el))
+                            {
+                                FieldInfo cf2 = el.GetType().GetField("_MainChrome", BindingFlags.Instance | BindingFlags.NonPublic);
+                                UIElement chrome2 = cf2 == null ? null : cf2.GetValue(el) as UIElement;
+                                if (chrome2 != null) chrome2.Visibility = GlassChromeOrigin[el];
+                                GlassChromeOrigin.Remove(el);
+                            }
                         }
                     }
                 }
