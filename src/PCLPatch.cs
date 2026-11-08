@@ -335,7 +335,7 @@ namespace PCLPatch
                 if (st.ImgLog < 2) { st.ImgLog++; DumpImages(st); }
                 ApplyWindowIcon();
                 GlassTick++;
-                if (IsGlassAll() && GlassTick % 6 == 0) ApplyGlassAll(st);
+                if (IsGlassAll()) ApplyGlassAll(st);   // 每个 tick 都套一遍，切页/启动时几乎立刻就是毛玻璃
                 if (GlassTick % 4 == 0) EnsureGlassSwitch(st);
                 // 左侧栏注入已关闭：PCL 左边栏是它自己的 Grid，硬插会把「版本选择」挤出可视区，
                 if (st.Page == null || !((UIElement)st.Page).IsVisible) return;
@@ -1464,6 +1464,27 @@ namespace PCLPatch
             }
             return null;
         }
+        private static void GlassClear(DependencyObject key, Border b)
+        {
+            try
+            {
+                if (GlassAll)
+                {
+                    if (!GlassOrigin.ContainsKey(key))
+                    {
+                        GlassOrigin[key] = b.Background;
+                        b.Background = null;   // 左边栏整块底板直接抠掉，背景图才透得出来
+                    }
+                }
+                else if (GlassOrigin.ContainsKey(key))
+                {
+                    b.Background = GlassOrigin[key];
+                    GlassOrigin.Remove(key);
+                }
+            }
+            catch { }
+        }
+
         private static void GlassBorder(DependencyObject key, Border b)
         {
             try
@@ -1485,12 +1506,100 @@ namespace PCLPatch
             }
             catch { }
         }
+        private static void MaybeGlassWhite(Border b)
+        {
+            try
+            {
+                SolidColorBrush sb = b.Background as SolidColorBrush;
+                if (sb == null) return;
+                Color c = sb.Color;
+                if (c.A != 255) return;                       // 已经半透明，别重复处理
+                if (c.R < 235 || c.G < 235 || c.B < 235) return; // 只处理接近白色的底板
+                if (b.ActualWidth * b.ActualHeight < 4000) return; // 按钮之类的小块不动
+                GlassBorder(b, b);
+            }
+            catch { }
+        }
+
         private static void GlassWalk(DependencyObject el)
         {
             if (el == null) return;
             try
             {
                 object obj = el;
+                Border anyBorder = el as Border;
+                FrameworkElement anyFe = el as FrameworkElement;
+                if (anyBorder != null && anyFe != null && anyFe.Name == "PanMainLeft")
+                {
+                    // 左栏有好几层叫 PanMainLeft 的 Border，全部抠成透明
+                    GlassClear(el, anyBorder);
+                    int cc = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
+                    for (int ci = 0; ci < cc; ci++)
+                    {
+                        Border cb = System.Windows.Media.VisualTreeHelper.GetChild(el, ci) as Border;
+                        if (cb != null) GlassClear(cb, cb);
+                    }
+                }
+                // 任何带 Background 的控件，只要是接近纯白的大块，都换成半透明
+                try
+                {
+                    PropertyInfo bgp = el.GetType().GetProperty("Background");
+                    if (bgp != null && bgp.CanWrite && bgp.PropertyType == typeof(Brush))
+                    {
+                        SolidColorBrush gsb = bgp.GetValue(el, null) as SolidColorBrush;
+                        FrameworkElement gfe = el as FrameworkElement;
+                        if (gsb != null && gfe != null && gsb.Color.A == 255
+                            && gsb.Color.R >= 235 && gsb.Color.G >= 235 && gsb.Color.B >= 235
+                            && gfe.ActualWidth * gfe.ActualHeight > 4000)
+                        {
+                            if (GlassAll)
+                            {
+                                if (!GlassOrigin.ContainsKey(el))
+                                {
+                                    GlassOrigin[el] = gsb;
+                                    bgp.SetValue(el, new SolidColorBrush(Color.FromArgb(0x9C, 0xFF, 0xFF, 0xFF)), null);
+                                }
+                            }
+                            else if (GlassOrigin.ContainsKey(el))
+                            {
+                                bgp.SetValue(el, GlassOrigin[el], null);
+                                GlassOrigin.Remove(el);
+                            }
+                        }
+                    }
+                }
+                catch { }
+                Panel anyPanel = el as Panel;
+                if (anyPanel != null && !(anyPanel is VirtualizingPanel))
+                {
+                    SolidColorBrush pb = anyPanel.Background as SolidColorBrush;
+                    if (pb != null && pb.Color.A == 255 && pb.Color.R >= 235 && pb.Color.G >= 235 && pb.Color.B >= 235
+                        && anyPanel.ActualWidth * anyPanel.ActualHeight > 4000)
+                    {
+                        if (GlassAll)
+                        {
+                            if (!GlassOrigin.ContainsKey(el))
+                            {
+                                GlassOrigin[el] = pb;
+                                anyPanel.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
+                            }
+                        }
+                        else if (GlassOrigin.ContainsKey(el))
+                        {
+                            anyPanel.Background = GlassOrigin[el];
+                            GlassOrigin.Remove(el);
+                        }
+                    }
+                }
+                if (anyBorder != null)
+                {
+                    if (GlassAll) MaybeGlassWhite(anyBorder);
+                    else if (GlassOrigin.ContainsKey(el))
+                    {
+                        anyBorder.Background = GlassOrigin[el];
+                        GlassOrigin.Remove(el);
+                    }
+                }
                 // 左边栏不是 MyCard，是一整块 Border，单独处理
 
                 if (obj.GetType().FullName == "PCL.MyCard")
