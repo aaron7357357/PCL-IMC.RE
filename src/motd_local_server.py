@@ -842,25 +842,34 @@ def _scan_versions():
     return names
 
 
-def _btn(text, event_type, data, tip, width=145, height=35, margin="0,0,0,0"):
+def _btn(text, event_type, data, tip, width=None, height=35, margin="0,0,0,0", column=None):
+    """按钮。width=None 时横向拉伸（跟着窗口变），指定 column 时放进 Grid 的对应列。"""
     S = xaml_escape
-    return ('            <local:MyButton Width="%d" Height="%d" Margin="%s" Padding="10,0,10,0" ColorType="Highlight"\n'
+    col = '' if column is None else ' Grid.Column="%d"' % column
+    size = 'HorizontalAlignment="Stretch"' if width is None else 'Width="%d"' % width
+    return ('            <local:MyButton%s %s Height="%d" Margin="%s" Padding="10,0,10,0" ColorType="Highlight"\n'
             '                        Text="%s" EventType="%s" EventData="%s" ToolTip="%s" />\n'
-            % (width, height, margin, S(text), event_type, S(data), S(tip)))
+            % (col, size, height, margin, S(text), event_type, S(data), S(tip)))
 
 
 def _version_row(name):
     S = xaml_escape
     short = name if len(name) <= 16 else name[:15] + "…"
-    return ('        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,0,0,6">\n'
-            '            <TextBlock Width="150" VerticalAlignment="Center" Text="' + S(short)
+    return ('        <Grid Margin="0,0,0,6">\n'
+            '            <Grid.ColumnDefinitions>\n'
+            '                <ColumnDefinition Width="150" />\n'
+            '                <ColumnDefinition Width="*" />\n'
+            '                <ColumnDefinition Width="*" />\n'
+            '            </Grid.ColumnDefinitions>\n'
+            '            <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="' + S(short)
             + '" ToolTip="' + S(name) + '" ' + _fg() + ' />\n'
             + _btn("正版", "启动游戏", name + "|" + PREMIUM_SERVER,
-                   "用 %s 进入 %s（正版账号）" % (name, PREMIUM_SERVER), width=120, height=32)
+                   "用 %s 进入 %s（正版账号）" % (name, PREMIUM_SERVER),
+                   height=32, margin="0,0,4,0", column=1)
             + _btn("离线", "启动游戏", name + "|" + SERVER,
                    "用 %s 进入 %s（离线账号）" % (name, SERVER),
-                   width=120, height=32, margin="8,0,0,0")
-            + '        </StackPanel>\n')
+                   height=32, margin="4,0,0,0", column=2)
+            + '        </Grid>\n')
 
 
 def _launch_block():
@@ -1007,7 +1016,18 @@ def _live_values(st):
     else:
         plist = "服务器离线，无法获取玩家列表。"
     return {"status": status, "motd": motd, "info": info, "plist": plist,
-            "tc": _tc_text(), "tc2": _tc_text2(), "tccode": _tc_code(_tc_state() or {})}
+            "tc": _tc_text(), "tc2": _tc_text2(), "tccode": _tc_code(_tc_state() or {}),
+            "tcurl": _tc_url(_tc_state() or {}),
+            "tcrun": "1" if _tc_running() else "0",
+            "tcenable": "1" if _tc_cfg_load()["enable"] else "0",
+            "tcauto": "1" if _tc_cfg_load()["autostart"] else "0",
+            "tcstop": "1" if _tc_cfg_load()["autostop"] else "0",
+            "tcfill": "1" if _tc_cfg_load()["autofill"] else "0",
+            "tcpath": _tc_exe() or "未找到 terracotta.exe",
+            "btnenable": ("☑ " if _tc_cfg_load()["enable"] else "☐ ") + "启用陶瓦联机",
+            "btnautostart": ("☑ " if _tc_cfg_load()["autostart"] else "☐ ") + "启动启动器时自动启动",
+            "btnautofill": ("☑ " if _tc_cfg_load()["autofill"] else "☐ ") + "联机成功后自动填入服务器地址",
+            "btnautostop": ("☑ " if _tc_cfg_load()["autostop"] else "☐ ") + "退出启动器时停止陶瓦联机"}
 
 
 # ---------------- 陶瓦联机（Terracotta） ----------------
@@ -1031,8 +1051,52 @@ TC_STATE_TEXT = {
 }
 
 
+TC_SETTINGS_FILE = "terracotta-home.json"
+_tc_cfg = {"loaded": False, "enable": True, "autostart": False,
+           "autostop": False, "autofill": False, "nick": "", "path": ""}
+
+
+def _tc_cfg_path():
+    return os.path.join(TC_DIR, TC_SETTINGS_FILE)
+
+
+def _tc_cfg_load():
+    """读本项目的陶瓦设置（存在 %LOCALAPPDATA%\\PCL\\Terracotta\\terracotta-home.json）"""
+    global _tc_cfg
+    if _tc_cfg["loaded"]:
+        return _tc_cfg
+    try:
+        with open(_tc_cfg_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for k in ("enable", "autostart", "autostop", "autofill"):
+            if k in data:
+                _tc_cfg[k] = bool(data[k])
+        for k in ("nick", "path"):
+            if k in data and isinstance(data[k], str):
+                _tc_cfg[k] = data[k]
+    except (OSError, ValueError):
+        pass
+    _tc_cfg["loaded"] = True
+    return _tc_cfg
+
+
+def _tc_cfg_save():
+    try:
+        os.makedirs(TC_DIR, exist_ok=True)
+        with open(_tc_cfg_path(), "w", encoding="utf-8") as f:
+            json.dump({"enable": _tc_cfg["enable"], "autostart": _tc_cfg["autostart"],
+                       "autostop": _tc_cfg["autostop"], "autofill": _tc_cfg["autofill"],
+                       "nick": _tc_cfg["nick"], "path": _tc_cfg["path"]}, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
 def _tc_exe():
     """只查有没有装好（不下载，避免卡住主页刷新）"""
+    _tc_cfg_load()
+    p = _tc_cfg.get("path") or ""
+    if p and os.path.isfile(p):
+        return p
     if not os.path.isdir(TC_DIR):
         return None
     for name in sorted(os.listdir(TC_DIR), reverse=True):
@@ -1377,7 +1441,9 @@ def _tc_start():
             outf = open(outpath, "wb")
         except OSError:
             outf = subprocess.DEVNULL
-        subprocess.Popen([exe], cwd=os.path.dirname(exe),
+        # --hmcl2 --hmcl 是陶瓦给启动器集成用的模式：只开接口，不弹浏览器。
+        # 不加这两个参数，陶瓦一启动就会自己打开网页，用户还得手动关掉。
+        subprocess.Popen([exe, "--hmcl2", "--hmcl"], cwd=os.path.dirname(exe),
                          stdout=outf, stderr=subprocess.STDOUT,
                          **_hidden_kwargs())
         port = _tc_wait_port_file(outpath)
@@ -1422,14 +1488,20 @@ def _tc_fire(path):
     threading.Thread(target=run, daemon=True).start()
 
 
-def _tc_host():
+def _tc_nick_q(player):
+    """陶瓦用 query 参数 player 传联机昵称（留空就用它的默认昵称）"""
+    p = (player or "").strip()
+    return "" if not p else "?player=" + urllib.parse.quote(p)
+
+
+def _tc_host(player=""):
     if not _tc_start():
         return False
-    _tc_fire("/state/scanning")
+    _tc_fire("/state/scanning" + _tc_nick_q(player))
     return True
 
 
-def _tc_join(code):
+def _tc_join(code, player=""):
     if not _tc_start():
         return False
     # 如果现在正在开房（host-*），先退回空闲，否则陶瓦会忽略加入请求
@@ -1440,13 +1512,54 @@ def _tc_join(code):
             time.sleep(0.2)
             if str((_tc_state() or {}).get("state", "")) == "waiting":
                 break
-    _tc_fire("/state/guesting?room=" + urllib.parse.quote(code))
+    _tc_fire("/state/guesting?room=" + urllib.parse.quote(code) + _tc_nick_q(player).replace("?", "&"))
     return True
 
 
 def _tc_open_url():
     port = _tc_port()
     return "http://127.0.0.1:%d/" % port if port else None
+
+
+def _tc_toggle(key):
+    """翻转主页上的开关（enable / autostart / autostop / autofill），并写回配置文件"""
+    _tc_cfg_load()
+    if key not in ("enable", "autostart", "autostop", "autofill"):
+        return False
+    _tc_cfg[key] = not bool(_tc_cfg.get(key))
+    _tc_cfg_save()
+    return True
+
+
+def _tc_detect():
+    """自动检测陶瓦程序路径：先常见目录，再问 PCL 的安装目录"""
+    _tc_cfg_load()
+    cands = []
+    for ver in ("0.4.2", "0.4.1", "0.4.0"):
+        cands.append(os.path.join(TC_DIR, ver, "terracotta.exe"))
+    try:
+        for name in sorted(os.listdir(TC_DIR), reverse=True):
+            cands.append(os.path.join(TC_DIR, name, "terracotta.exe"))
+    except OSError:
+        pass
+    for p in cands:
+        if os.path.isfile(p):
+            _tc_cfg["path"] = p
+            _tc_cfg_save()
+            return True
+    return False
+
+
+def _tc_detach():
+    """断开房间：只退回空闲状态，陶瓦进程留着，下次建房不用重新启动"""
+    _tc_http("/state/ide", timeout=6)
+    state = ""
+    for _ in range(20):
+        time.sleep(0.2)
+        state = str((_tc_state() or {}).get("state", ""))
+        if state == "waiting":
+            break
+    return state == "waiting"
 
 
 def _tc_stop():
@@ -1477,7 +1590,7 @@ def _tc_text():
     if not st:
         return "陶瓦正在启动……"
     state = str(st.get("state", ""))
-    text = TC_STATE_TEXT.get(state, state or "未知状态")
+    text = _tc_exc_text(st) if state == "exception" else TC_STATE_TEXT.get(state, state or "未知状态")
     code = _tc_code(st)
     if code:
         return text + "　联机码：" + code
@@ -1502,6 +1615,35 @@ def _tc_text2():
         return "正在连接房主的房间，连上后会写进游戏的多人列表。"
     return "两个人要玩同一个版本的存档，不需要装 Mod，也不用端口映射。"
 
+
+def _tc_url(st):
+    """加入房间成功时 /state 会带 url（备用联机地址），可以直接填进游戏的服务器地址"""
+    if not isinstance(st, dict):
+        return ""
+    v = st.get("url")
+    return v.strip() if isinstance(v, str) else ""
+
+
+# /state 的 exception 带 type：0 加入失败 1 连接断开 2 加入时 EasyTier 崩溃
+# 3 建房时 EasyTier 崩溃 4 房间已关闭（退出存档）5 协议错误
+TC_EXC_TEXT = {
+    0: "加入房间失败（房间已关闭或网络不稳定）",
+    1: "房间连接断开（房间已关闭或网络不稳定）",
+    2: "加入房间失败（EasyTier 崩溃）",
+    3: "创建房间失败（EasyTier 崩溃）",
+    4: "房间已关闭（你退出了存档）",
+    5: "协议错误（房主返回了异常数据）",
+}
+
+
+def _tc_exc_text(st):
+    if not isinstance(st, dict):
+        return "联机出错"
+    try:
+        k = int(st.get("type"))
+    except (TypeError, ValueError):
+        return "联机出错（公共节点连不上就换个网络试试）"
+    return TC_EXC_TEXT.get(k, "联机出错")
 
 def _tc_code(st):
     """联机码在 /state 的 room 字段里（陶瓦自己的网页就是从 r.room 取的）"""
@@ -1553,33 +1695,65 @@ def build_page():
                     '                   Text="正在读取玩家列表……" />\n')
 
     # 联机卡：按钮带 Tag="act:*"，由 PCLPatch.dll 接管点击，直接驱动本机陶瓦（Terracotta）
-    link_card = _card("联机 · 陶瓦",
-                      '        <TextBlock Tag="live:tc" TextWrapping="Wrap" Margin="0,0,0,4" FontWeight="Bold" ' + _fg() + '\n'
-                      '                   Text="正在检查陶瓦……" />\n'
-                      '        <TextBlock Tag="live:tc2" TextWrapping="Wrap" Margin="0,0,0,10" Foreground="#FF6B7885"\n'
-                      '                   Text="两个人要玩同一个版本的存档，不需要装 Mod。" />\n'
-                      '        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,0,0,8">\n'
-                      '            <local:MyButton Tag="act:tc-host" Width="110" Height="34" Margin="0,0,8,0" Padding="10,0,10,0"\n'
-                      '                        ColorType="Highlight" Text="创建房间"\n'
-                      '                        ToolTip="启动陶瓦并进入等待：随后进单人存档按 ESC → 对局域网开放即可" />\n'
-                      '            <local:MyButton Tag="act:tc-copy" Width="110" Height="34" Margin="0,0,8,0" Padding="10,0,10,0"\n'
-                      '                        ColorType="Highlight" Text="复制联机码"\n'
-                      '                        ToolTip="把当前房间的联机码复制到剪贴板" />\n'
-                      '            <local:MyButton Tag="act:tc-stop" Width="90" Height="34" Padding="10,0,10,0"\n'
-                      '                        ColorType="Highlight" Text="关闭联机"\n'
-                      '                        ToolTip="结束房间并退出陶瓦" />\n'
-                      '        </StackPanel>\n'
-                      '        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">\n'
-                      '            <local:MyTextBox Tag="in:code" Width="200" Height="34" Margin="0,0,8,0"\n'
-                      '                        FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"\n'
-                      '                        HintText="输入朋友的联机码" />\n'
-                      '            <local:MyButton Tag="act:tc-join" Width="90" Height="34" Margin="0,0,8,0" Padding="10,0,10,0"\n'
-                      '                        ColorType="Highlight" Text="加入房间"\n'
-                      '                        ToolTip="用上面的联机码加入朋友的房间" />\n'
-                      '            <local:MyButton Tag="act:tc-panel" Width="110" Height="34" Padding="10,0,10,0"\n'
-                      '                        ColorType="Highlight" Text="打开陶瓦面板"\n'
-                      '                        ToolTip="需要更详细的操作时，用浏览器打开陶瓦原面板" />\n'
-                      '        </StackPanel>\n')
+    _TC_CARD_XAML = """        <local:MyCheckBox Tag="chk:tcenable" Text="启用陶瓦联机" Checked="True" Margin="0,0,0,8" ToolTip="关掉后主页只显示状态，不再自动拉起陶瓦" />
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Tag="live:tcpath" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF6B7885" FontSize="12"
+                           Text="未找到 terracotta.exe" />
+                <local:MyButton Grid.Column="1" Tag="act:tc-detect" Height="30" Padding="10,0,10,0"
+                                ColorType="Highlight" Text="自动检测" ToolTip="在 PCL 的陶瓦目录里找 terracotta.exe" />
+            </Grid>
+            <local:MyTextBox Tag="in:nick" Height="32" Margin="0,0,0,8" FontSize="13"
+                             VerticalContentAlignment="Center" Padding="8,0,8,0"
+                             HintText="联机昵称（可留空，留空用陶瓦默认昵称）" />
+            <TextBlock Tag="live:tc" TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" @@FG@@
+                       Text="正在检查陶瓦……" />
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.4*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <local:MyTextBox Grid.Column="0" Tag="in:code" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
+                                 FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"
+                                 HintText="U/XXXX-XXXX-XXXX-XXXX" />
+                <local:MyButton Grid.Column="1" Tag="act:tc-join" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0"
+                                Padding="10,0,10,0" ColorType="Highlight" Text="加入房间" />
+                <local:MyButton Grid.Column="2" Tag="act:tc-copy" HorizontalAlignment="Stretch" Height="32"
+                                Padding="10,0,10,0" ColorType="Highlight" Text="复制邀请码" />
+            </Grid>
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <local:MyButton Grid.Column="0" Tag="act:tc-start" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="启动组件" ToolTip="只启动陶瓦，不进房间" />
+                <local:MyButton Grid.Column="1" Tag="act:tc-stop|dis:tcrun" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="停止组件" ToolTip="结束房间并退出陶瓦进程" />
+                <local:MyButton Grid.Column="2" Tag="act:tc-host" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="创建房间" ToolTip="启动陶瓦并等待你开放局域网世界" />
+                <local:MyButton Grid.Column="3" Tag="act:tc-detach" HorizontalAlignment="Stretch" Height="32" Margin="0,0,4,0" Padding="6,0,6,0" ColorType="Highlight" Text="断开房间" ToolTip="只退出房间，陶瓦进程留着" />
+                <local:MyButton Grid.Column="4" Tag="act:tc-url" HorizontalAlignment="Stretch" Height="32" Padding="6,0,6,0" ColorType="Highlight" Text="复制连接地址" ToolTip="加入成功后，把连接地址填进游戏的服务器地址" />
+            </Grid>
+            <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <local:MyCheckBox Grid.Column="0" Tag="chk:tcauto" Text="启动启动器时自动启动" Checked="False" Margin="0,0,6,0" />
+                <local:MyCheckBox Grid.Column="1" Tag="chk:tcfill" Text="联机成功后自动填入服务器地址" Checked="False" />
+            </Grid>
+            <local:MyCheckBox Tag="chk:tcstop" Text="退出启动器时停止陶瓦联机" Checked="False" Margin="0,0,0,8" />
+            <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
+                       Text="创建房间后，进单人存档按 ESC → 对局域网开放即可生成邀请码；加入成功后点「复制连接地址」填进服务器地址。" />
+    """
+
+    link_card = _card("联机 · 陶瓦", _TC_CARD_XAML.replace("@@FG@@", _fg()))
 
     # QQ 群卡
     qq_rows = []
@@ -1587,12 +1761,16 @@ def build_page():
         qq_rows.append(
             '        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" ' + _fg() + '\n'
             '                   Text="群号：' + S(gid) + '　' + S(gname) + '" />\n'
-            '        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,0,0,12">\n'
-            '            <local:MyButton Margin="0,0,10,0" Width="150" Height="35" HorizontalAlignment="Left" Padding="13,0,13,0" ColorType="Highlight"\n'
+            '        <Grid Margin="0,0,0,12">\n'
+            '            <Grid.ColumnDefinitions>\n'
+            '                <ColumnDefinition Width="*" />\n'
+            '                <ColumnDefinition Width="*" />\n'
+            '            </Grid.ColumnDefinitions>\n'
+            '            <local:MyButton Grid.Column="0" HorizontalAlignment="Stretch" Margin="0,0,4,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"\n'
             '                        Text="复制' + S(gname) + '号" EventType="复制文本" EventData="' + S(gid) + '" ToolTip="点击复制群号，粘贴到 QQ 搜索即可找到群" />\n'
-            '            <local:MyButton Margin="0,0,10,0" Width="150" Height="35" HorizontalAlignment="Left" Padding="13,0,13,0" ColorType="Highlight"\n'
+            '            <local:MyButton Grid.Column="1" HorizontalAlignment="Stretch" Margin="4,0,0,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"\n'
             '                        Text="打开加群页" EventType="打开网页" EventData="https://qun.qq.com/" ToolTip="在浏览器打开 QQ 群官网；如有群邀请链接可替换此地址实现一键加群" />\n'
-            '        </StackPanel>\n'
+            '        </Grid>\n'
         )
     qq_card = _card("加入 QQ 群", "".join(qq_rows))
 
@@ -1722,9 +1900,19 @@ class Handler(BaseHTTPRequestHandler):
             action = (q.get("do") or [""])[0]
             ok = False
             if action == "tc-host":
-                ok = _tc_host()
+                ok = _tc_host((q.get("nick") or [""])[0])
             elif action == "tc-join":
-                ok = _tc_join((q.get("code") or [""])[0])
+                ok = _tc_join((q.get("code") or [""])[0], (q.get("nick") or [""])[0])
+            elif action == "tc-detach":
+                ok = _tc_detach()
+            elif action.startswith("tc-tog:"):
+                ok = _tc_toggle(action[7:])
+            elif action == "tc-detect":
+                ok = _tc_detect()
+            elif action == "tc-start":
+                ok = _tc_start()
+            elif action == "tc-stopcomp":
+                ok = _tc_detach()
             elif action == "tc-stop":
                 ok = _tc_stop()
             elif action == "tc-panel":
@@ -1734,6 +1922,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": ok,
                 "state": st,
                 "code": _tc_code(st),
+                "url": _tc_url(st),
                 "panel": _tc_open_url() or "",
                 "echo": action,
             }, ensure_ascii=False))
