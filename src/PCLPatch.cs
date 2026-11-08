@@ -334,6 +334,9 @@ namespace PCLPatch
                 HideSplashIfReady(st);
                 if (st.ImgLog < 2) { st.ImgLog++; DumpImages(st); }
                 ApplyWindowIcon();
+                GlassTick++;
+                if (IsGlassAll() && GlassTick % 6 == 0) ApplyGlassAll(st);
+                if (GlassTick % 4 == 0) EnsureGlassSwitch(st);
                 // 左侧栏注入已关闭：PCL 左边栏是它自己的 Grid，硬插会把「版本选择」挤出可视区，
                 if (st.Page == null || !((UIElement)st.Page).IsVisible) return;
 
@@ -1383,6 +1386,174 @@ namespace PCLPatch
         /// 把带 Tag="glass" 的原生折叠卡（MyCard）的白底去掉，让它露出外层毛玻璃。
         /// MyCard 的白底画在内部 MainBorder 上，直接把它清空即可。
         /// </summary>
+        // ---------------- 全局毛玻璃（个性化里的开关） ----------------
+        // 开关状态存在 PCL\imc-glass.txt；打开后把 PCL 每个 MyCard 的白底换成半透明，
+        // 背景图就能透出来（自定义主页那套也是同一个思路）。
+
+        private static bool GlassAll;
+        private static bool GlassLoaded;
+        private static readonly Dictionary<DependencyObject, Brush> GlassOrigin = new Dictionary<DependencyObject, Brush>();
+        private static bool GlassSwitchDone;
+        private static WeakReference GlassCardRef;
+        private static int GlassTick;
+
+        private static bool IsGlassAll()
+        {
+            if (!GlassLoaded)
+            {
+                GlassLoaded = true;
+                try
+                {
+                    string path = Path.Combine(AppDir(), "PCL", "imc-glass.txt");
+                    if (File.Exists(path)) GlassAll = File.ReadAllText(path).Trim() == "1";
+                }
+                catch { }
+            }
+            return GlassAll;
+        }
+
+        private static void SetGlassAll(State st, bool on)
+        {
+            GlassAll = on;
+            GlassLoaded = true;
+            try
+            {
+                string path = Path.Combine(AppDir(), "PCL", "imc-glass.txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, on ? "1" : "0");
+            }
+            catch { }
+            Log(st, "glass: " + (on ? "on" : "off"));
+            ApplyGlassAll(st);
+        }
+
+        private static void ApplyGlassAll(State st)
+        {
+            try
+            {
+                Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                if (w == null) return;
+                GlassWalk(w);
+            }
+            catch (Exception ex) { Log(st, "glass error: " + ex.Message); }
+        }
+
+        private static void GlassWalk(DependencyObject el)
+        {
+            if (el == null) return;
+            try
+            {
+                object obj = el;
+                if (obj.GetType().FullName == "PCL.MyCard")
+                {
+                    FieldInfo fi = obj.GetType().GetField("MainBorder", BindingFlags.Instance | BindingFlags.NonPublic);
+                    Border border = fi == null ? null : fi.GetValue(obj) as Border;
+                    if (border != null)
+                    {
+                        if (GlassAll)
+                        {
+                            if (!GlassOrigin.ContainsKey(el))
+                            {
+                                GlassOrigin[el] = border.Background;
+                                SolidColorBrush b = new SolidColorBrush(Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF));
+                                border.Background = b;
+                            }
+                        }
+                        else if (GlassOrigin.ContainsKey(el))
+                        {
+                            border.Background = GlassOrigin[el];
+                            GlassOrigin.Remove(el);
+                        }
+                    }
+                }
+                int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
+                for (int i = 0; i < n; i++) GlassWalk(System.Windows.Media.VisualTreeHelper.GetChild(el, i));
+            }
+            catch { }
+        }
+
+        /// <summary>个性化页顶部插一个「全局毛玻璃」勾选框（PCL 自己的页面，只加得进去一整个卡片）</summary>
+        private static void EnsureGlassSwitch(State st)
+        {
+            if (GlassSwitchDone)
+            {
+                FrameworkElement old = GlassCardRef == null ? null : GlassCardRef.Target as FrameworkElement;
+                if (old != null && old.IsLoaded && VisualTreeHelper.GetParent(old) != null) return;
+                GlassSwitchDone = false;   // 页面被 PCL 重建了，重插一次
+            }
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            FrameworkElement anchor = FindByText(w, "背景音乐");
+            if (anchor == null) return;              // 不在个性化页
+            try
+            {
+                // 往上找卡片所在的 StackPanel
+                DependencyObject child = anchor;
+                DependencyObject parent = VisualTreeHelper.GetParent(child);
+                Panel host = null;
+                int guard = 0;
+                while (parent != null && guard++ < 12)
+                {
+                    StackPanel sp = parent as StackPanel;
+                    if (sp != null) { host = sp; break; }
+                    child = parent;
+                    parent = VisualTreeHelper.GetParent(parent);
+                }
+                if (host == null) { Log(st, "glass: settings host not found"); return; }
+
+                Border card = new Border();
+                card.CornerRadius = new CornerRadius(8);
+                card.Background = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF));
+                card.Margin = new Thickness(0, 0, 0, 12);
+                card.Padding = new Thickness(16, 12, 16, 12);
+                StackPanel inner = new StackPanel();
+                card.Child = inner;
+
+                Type ckType = null;
+                try
+                {
+                    Assembly asm = w.GetType().Assembly;
+                    ckType = asm.GetType("PCL.MyCheckBox");
+                }
+                catch { }
+                if (ckType == null) { Log(st, "glass: MyCheckBox type missing"); return; }
+                object ck = Activator.CreateInstance(ckType);
+                FrameworkElement ckFe = ck as FrameworkElement;
+                SetProp(ck, "Text", "所有页面使用毛玻璃（半透明卡片）");
+                try
+                {
+                    PropertyInfo cp = ckType.GetProperty("Checked");
+                    if (cp != null && cp.CanWrite) cp.SetValue(ck, IsGlassAll(), null);
+                }
+                catch { }
+                inner.Children.Add(ckFe);
+                TextBlock tip = new TextBlock();
+                tip.Text = "打开后 PCL 所有页面的卡片都会变成半透明，背景图能透出来；改完立即生效。";
+                tip.FontSize = 11;
+                tip.Opacity = 0.7;
+                tip.TextWrapping = TextWrapping.Wrap;
+                tip.Margin = new Thickness(0, 6, 0, 0);
+                inner.Children.Add(tip);
+
+                ckFe.AddHandler(UIElement.MouseLeftButtonUpEvent,
+                    new MouseButtonEventHandler(delegate(object s, MouseButtonEventArgs e)
+                    {
+                        try
+                        {
+                            bool now = !IsGlassAll();
+                            SetProp(ck, "Checked", now);
+                            SetGlassAll(st, now);
+                        }
+                        catch { }
+                    }), true);
+
+                host.Children.Insert(0, card);
+                GlassSwitchDone = true;
+                GlassCardRef = new WeakReference(card);
+                Log(st, "glass: switch inserted into settings, host=" + host.Name + " count=" + host.Children.Count);
+            }
+            catch (Exception ex) { Log(st, "glass switch error: " + ex.Message); }
+        }
         private static bool StyleGlassCards(State st)
         {
             try
