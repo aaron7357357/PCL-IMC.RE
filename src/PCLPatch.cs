@@ -334,6 +334,7 @@ namespace PCLPatch
                 HideSplashIfReady(st);
                 if (st.ImgLog < 2) { st.ImgLog++; DumpImages(st); }
                 ApplyWindowIcon();
+                // 左侧栏注入已关闭：PCL 左边栏是它自己的 Grid，硬插会把「版本选择」挤出可视区，
                 if (st.Page == null || !((UIElement)st.Page).IsVisible) return;
 
                 // 毛玻璃处理要在任何模式（联网 / 本地文件 / 预设）下都跑一遍，
@@ -423,6 +424,13 @@ namespace PCLPatch
                 string status;
                 if (!d.TryGetValue("status", out status)) status = "";
                 int touched = WalkLive(host, d, status);
+                // 左侧栏那行小字跟着「内存优化」的实时状态走
+                try
+                {
+                    string memText;
+                    if (MemLabel != null && d.TryGetValue("memtext", out memText)) MemLabel.Text = memText;
+                }
+                catch { }
                 if (st.LiveWalkLog < 3)
                 {
                     st.LiveWalkLog++;
@@ -677,6 +685,304 @@ namespace PCLPatch
         }
 
         /// <summary>
+        // ---------------- 左侧栏「内存优化」按钮 ----------------
+        // 主页卡片已经很多，所以把内存优化塞到 PCL 左侧栏的空白处：
+        // 找到「启动游戏」按钮，在它正上方插一个按钮 + 一行结果文字。
+
+        private static TextBlock MemLabel;
+        private static FrameworkElement MemButton;
+        private static bool MemTried;
+
+        private static void EnsureSidebarMem(State st)
+        {
+            if (MemTried) return;
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            // PCL 的「启动游戏」不是标准 ButtonBase，只是带 Text 属性的自定义控件，
+            // 所以按文字找元素，再往上找到真正的按钮控件和它所在的 StackPanel。
+            FrameworkElement hit = FindByText(w, "启动游戏");
+            if (hit == null) return;             // 页面还没建好，下一个 tick 再试
+            MemTried = true;
+            try
+            {
+                Log(st, "sidebar: hit = " + hit.GetType().FullName);
+                DumpChain(st, hit);
+
+                object btnObj = null;
+                DependencyObject cur = hit;
+                for (int i = 0; i < 8 && cur != null; i++)
+                {
+                    PropertyInfo p = cur.GetType().GetProperty("Text");
+                    if (p != null && p.CanWrite && cur is Control) { btnObj = cur; break; }
+                    cur = VisualTreeHelper.GetParent(cur);
+                }
+                if (btnObj == null) btnObj = hit;
+                Log(st, "sidebar: button type = " + btnObj.GetType().FullName);
+
+                FrameworkElement btn = MakeMemButton((FrameworkElement)btnObj);
+                if (btn == null) { Log(st, "sidebar: cannot create button"); return; }
+                MemButton = btn;
+                StackPanel box = new StackPanel();
+                box.Width = 258;
+                box.Margin = new Thickness(0, 0, 0, 8);
+                box.Children.Add(btn);
+                MemLabel = new TextBlock();
+                MemLabel.Text = "点一下释放内存";
+                MemLabel.FontSize = 11;
+                MemLabel.Margin = new Thickness(0, 6, 0, 0);
+                MemLabel.TextAlignment = TextAlignment.Center;
+                MemLabel.TextWrapping = TextWrapping.Wrap;
+                MemLabel.Opacity = 0.75;
+                box.Children.Add(MemLabel);
+
+                DependencyObject child = hit;
+                DependencyObject parent = VisualTreeHelper.GetParent(child);
+                int guard = 0;
+                while (parent != null && guard++ < 14)
+                {
+                    Panel panel = parent as Panel;
+                    if (panel != null)
+                    {
+                        StackPanel sp = panel as StackPanel;
+                        if (sp != null)
+                        {
+                            int idx = sp.Children.IndexOf((UIElement)child);
+                            if (idx >= 0)
+                            {
+                                sp.Children.Insert(idx, box);
+                                Log(st, "sidebar: inserted into StackPanel before " + child.GetType().Name + " at " + idx);
+                                return;
+                            }
+                        }
+                        Grid g = panel as Grid;
+                        if (g != null && g.RowDefinitions.Count > 0)
+                        {
+                            if (TryInsertIntoEmptyRow(st, g, box)) return;
+                            if (TryInsertIntoBigRow(st, g, box)) return;
+                            if (TryInsertIntoContainer(st, g, box)) return;
+                        }
+                    }
+                    child = parent;
+                    parent = VisualTreeHelper.GetParent(parent);
+                }
+                Log(st, "sidebar: no usable container");
+            }
+            catch (Exception ex) { Log(st, "sidebar error: " + ex); }
+        }
+
+        /// <summary>把「启动游戏」往上几层的类型 / 名字 / 尺寸打出来，方便确认插到了哪一层</summary>
+        private static void DumpChain(State st, DependencyObject el)
+        {
+            DependencyObject cur = el;
+            for (int i = 0; i < 8 && cur != null; i++)
+            {
+                FrameworkElement fe = cur as FrameworkElement;
+                string info = i + ":" + cur.GetType().Name;
+                if (fe != null) info += "[" + fe.Name + " " + (int)fe.ActualWidth + "x" + (int)fe.ActualHeight + "]";
+                Panel p = cur as Panel;
+                if (p != null) info += " children=" + p.Children.Count;
+                Log(st, "  " + info);
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+        }
+
+        private static FrameworkElement FindByText(DependencyObject root, string text)
+        {
+            FrameworkElement fe = root as FrameworkElement;
+            if (fe != null && GetText(fe) == text) return fe;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                FrameworkElement hit = FindByText(VisualTreeHelper.GetChild(root, i), text);
+                if (hit != null) return hit;
+            }
+            return null;
+        }
+
+        private static string GetText(object obj)
+        {
+            try
+            {
+                PropertyInfo p = obj.GetType().GetProperty("Text");
+                if (p != null)
+                {
+                    object v = p.GetValue(obj, null);
+                    if (v is string) return (string)v;
+                }
+            }
+            catch { }
+            try
+            {
+                ContentControl cc = obj as ContentControl;
+                if (cc != null && cc.Content is string) return (string)cc.Content;
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>照着「启动游戏」按钮的类做一份一样的，样式才会跟左边栏一致</summary>
+        private static FrameworkElement MakeMemButton(FrameworkElement launch)
+        {
+            FrameworkElement btn = null;
+            object o = null;
+            try
+            {
+                o = Activator.CreateInstance(launch.GetType());
+                btn = o as FrameworkElement;
+            }
+            catch (Exception ex) { TryLog("sidebar ctor: " + ex.Message); }
+            if (btn == null) return null;
+            SetProp(o, "Text", "内存优化");
+            // 颜色类型跟着「启动游戏」走，才会是左边栏那种蓝色按钮
+            try
+            {
+                PropertyInfo cp = o.GetType().GetProperty("ColorType");
+                PropertyInfo lp = launch.GetType().GetProperty("ColorType");
+                if (cp != null && lp != null && cp.CanWrite)
+                {
+                    object v = lp.GetValue(launch, null);
+                    if (v != null) cp.SetValue(o, v, null);
+                }
+            }
+            catch { }
+            btn.Height = 40;
+            btn.Margin = new Thickness(0, 0, 0, 0);
+            btn.HorizontalAlignment = HorizontalAlignment.Stretch;
+            btn.Tag = "act:memopt";
+            btn.ToolTip = "清工作集 / 刷已修改页 / 清待命列表，和百宝箱里的「内存优化」一个效果";
+            btn.AddHandler(UIElement.MouseLeftButtonUpEvent,
+                new MouseButtonEventHandler(delegate(object s, MouseButtonEventArgs e)
+                {
+                    try { RunAction(btn, "memopt"); } catch { }
+                }), true);
+            return btn;
+        }
+
+        /// <summary>左侧栏是 Grid：找一行空着的、又够高的行，把按钮放进去（就是那块空白）</summary>
+        private static bool TryInsertIntoEmptyRow(State st, Grid g, FrameworkElement box)
+        {
+            try
+            {
+                int rows = g.RowDefinitions.Count;
+                StringBuilder sb = new StringBuilder();
+                sb.Append("sidebar grid " + g.Name + " rows=" + rows + " children=" + g.Children.Count + " :");
+                bool[] used = new bool[rows];
+                foreach (UIElement c in g.Children)
+                {
+                    int r = Grid.GetRow(c);
+                    if (r >= 0 && r < rows) used[r] = true;
+                }
+                for (int i = 0; i < rows; i++)
+                {
+                    sb.Append(" [" + i + (used[i] ? " used " : " free ") + (int)g.RowDefinitions[i].ActualHeight + "]");
+                }
+                Log(st, sb.ToString());
+                int best = -1;
+                double bestH = 0;
+                for (int i = 0; i < rows; i++)
+                {
+                    if (used[i]) continue;
+                    double h = g.RowDefinitions[i].ActualHeight;
+                    if (h > bestH) { bestH = h; best = i; }
+                }
+                if (best < 0 || bestH < 40) return false;
+                box.SetValue(Grid.RowProperty, best);
+                box.HorizontalAlignment = HorizontalAlignment.Stretch;
+                box.VerticalAlignment = VerticalAlignment.Center;
+                box.Margin = new Thickness(0, 6, 0, 6);
+                g.Children.Add(box);
+                Log(st, "sidebar: inserted into grid row " + best + " h=" + (int)bestH);
+                return true;
+            }
+            catch (Exception ex) { Log(st, "sidebar row error: " + ex.Message); return false; }
+        }
+
+        /// <summary>空白就在最高那一行的下半截：放进那一行、贴底，正好落在「启动游戏」上面</summary>
+        private static bool TryInsertIntoBigRow(State st, Grid g, FrameworkElement box)
+        {
+            try
+            {
+                int rows = g.RowDefinitions.Count;
+                if (rows == 0) return false;
+                int best = -1;
+                double bestH = 0;
+                for (int i = 0; i < rows; i++)
+                {
+                    double h = g.RowDefinitions[i].ActualHeight;
+                    if (h > bestH) { bestH = h; best = i; }
+                }
+                if (best < 0 || bestH < 80) return false;
+                box.SetValue(Grid.RowProperty, best);
+                box.HorizontalAlignment = HorizontalAlignment.Stretch;
+                box.VerticalAlignment = VerticalAlignment.Bottom;
+                box.Margin = new Thickness(0, 0, 0, 8);
+                g.Children.Add(box);
+                Log(st, "sidebar: added to " + g.Name + " row " + best + " h=" + (int)bestH + " (bottom)");
+                return true;
+            }
+            catch (Exception ex) { Log(st, "sidebar bigrow error: " + ex.Message); return false; }
+        }
+        /// <summary>左栏那块空白在最高的那一行里面：钻进去，放到最下面的空位</summary>
+        private static bool TryInsertIntoContainer(State st, Grid host, FrameworkElement box)
+        {
+            try
+            {
+                UIElement big = null;
+                double bh = 0;
+                foreach (UIElement c in host.Children)
+                {
+                    FrameworkElement fe = c as FrameworkElement;
+                    if (fe == null) continue;
+                    if (fe.ActualHeight > bh) { bh = fe.ActualHeight; big = c; }
+                }
+                if (big == null) return false;
+                DependencyObject node = big;
+                for (int depth = 0; depth < 5 && node != null; depth++)
+                {
+                    FrameworkElement fe = node as FrameworkElement;
+                    Log(st, "  big[" + depth + "]=" + node.GetType().Name + "[" + (fe == null ? "?" : fe.Name) + " "
+                        + (fe == null ? 0 : (int)fe.ActualWidth) + "x" + (fe == null ? 0 : (int)fe.ActualHeight) + "]");
+                    Grid g = node as Grid;
+                    if (g != null && g.RowDefinitions.Count > 0)
+                    {
+                        int last = g.RowDefinitions.Count - 1;
+                        box.SetValue(Grid.RowProperty, last);
+                        box.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        box.VerticalAlignment = VerticalAlignment.Center;
+                        box.Margin = new Thickness(0, 6, 0, 6);
+                        g.Children.Add(box);
+                        Log(st, "sidebar: added to " + g.Name + " row " + last + "/" + g.RowDefinitions.Count);
+                        return true;
+                    }
+                    StackPanel sp = node as StackPanel;
+                    if (sp != null)
+                    {
+                        box.Margin = new Thickness(0, 8, 0, 8);
+                        sp.Children.Add(box);
+                        Log(st, "sidebar: appended to " + sp.Name);
+                        return true;
+                    }
+                    Border bd = node as Border;
+                    if (bd != null) { node = bd.Child; continue; }
+                    ContentControl cc = node as ContentControl;
+                    if (cc != null) { node = cc.Content as DependencyObject; continue; }
+                    break;
+                }
+                return false;
+            }
+            catch (Exception ex) { Log(st, "sidebar container error: " + ex.Message); return false; }
+        }
+        private static void SetProp(object obj, string name, object value)
+        {
+            if (obj == null || value == null) return;
+            try
+            {
+                PropertyInfo p = obj.GetType().GetProperty(name);
+                if (p != null && p.CanWrite) p.SetValue(obj, value, null);
+            }
+            catch { }
+        }
+
         /// 主页上的动作按钮（Tag="act:xxx"）：PCL 的自定义主页事件表达不了“驱动本机陶瓦”，
         /// 所以这里自己接管点击，请求本地服务的 /tc 接口。
         /// </summary>
