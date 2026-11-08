@@ -1434,16 +1434,63 @@ namespace PCLPatch
                 Window w = Application.Current == null ? null : Application.Current.MainWindow;
                 if (w == null) return;
                 GlassWalk(w);
+                // 左边栏（整块白色 Border）也做成半透明
+                FrameworkElement side = FindByName(w, "PanMainLeft");
+                if (side is Border)
+                {
+                    GlassBorder(side, (Border)side);
+                    int sc = System.Windows.Media.VisualTreeHelper.GetChildrenCount(side);
+                    for (int si = 0; si < sc; si++)
+                    {
+                        Border inner = System.Windows.Media.VisualTreeHelper.GetChild(side, si) as Border;
+                        if (inner != null) GlassBorder(inner, inner);
+                    }
+                }
             }
             catch (Exception ex) { Log(st, "glass error: " + ex.Message); }
         }
 
+        private static FrameworkElement FindByName(DependencyObject root, string name)
+        {
+            FrameworkElement fe = root as FrameworkElement;
+            if (fe != null && fe.Name == name) return fe;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                FrameworkElement hit = FindByName(VisualTreeHelper.GetChild(root, i), name);
+                if (hit != null) return hit;
+            }
+            return null;
+        }
+        private static void GlassBorder(DependencyObject key, Border b)
+        {
+            try
+            {
+                if (GlassAll)
+                {
+                    if (!GlassOrigin.ContainsKey(key))
+                    {
+                        GlassOrigin[key] = b.Background;
+                        b.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
+                        TryLog("glass border: " + (b.Name ?? "") + " " + (int)b.ActualWidth + "x" + (int)b.ActualHeight);
+                    }
+                }
+                else if (GlassOrigin.ContainsKey(key))
+                {
+                    b.Background = GlassOrigin[key];
+                    GlassOrigin.Remove(key);
+                }
+            }
+            catch { }
+        }
         private static void GlassWalk(DependencyObject el)
         {
             if (el == null) return;
             try
             {
                 object obj = el;
+                // 左边栏不是 MyCard，是一整块 Border，单独处理
+
                 if (obj.GetType().FullName == "PCL.MyCard")
                 {
                     FieldInfo fi = obj.GetType().GetField("MainBorder", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1501,7 +1548,20 @@ namespace PCLPatch
                 }
                 if (host == null) { Log(st, "glass: settings host not found"); return; }
 
+                // 已经插过就别再插（PCL 重排时 IsLoaded 会短暂为 false，容易插重复）
+                foreach (UIElement old in host.Children)
+                {
+                    FrameworkElement ofe = old as FrameworkElement;
+                    if (ofe != null && (ofe.Tag as string) == "imc-glass-card")
+                    {
+                        GlassSwitchDone = true;
+                        GlassCardRef = new WeakReference(ofe);
+                        return;
+                    }
+                }
+
                 Border card = new Border();
+                card.Tag = "imc-glass-card";
                 card.CornerRadius = new CornerRadius(8);
                 card.Background = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF));
                 card.Margin = new Thickness(0, 0, 0, 12);
@@ -1575,6 +1635,8 @@ namespace PCLPatch
             try
             {
                 object obj = el;
+                // 左边栏不是 MyCard，是一整块 Border，单独处理
+
                 if (obj.GetType().FullName == "PCL.MyCard")
                 {
                     FrameworkElement fe = obj as FrameworkElement;
