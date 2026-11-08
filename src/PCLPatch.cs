@@ -82,6 +82,7 @@ namespace PCLPatch
 
                     int ms = ReadIntervalMs();
                     LoadWindowIcon();   // 先准备好窗口图标，tick 里再套上去
+                    AutoTerracotta();   // 开了「启动启动器时自动启动」就把陶瓦拉起来
                     // ShowSplash(st);  // 加载画面已改为直接替换 exe 内嵌图标，这里不再需要
                     Log(st, "install: interval=" + ms + "ms, LoadContent=" + (st.LoadContent != null)
                         + ", SettingsGet=" + (st.SettingsGet != null)
@@ -270,6 +271,26 @@ namespace PCLPatch
 
         /// <summary>把窗口左上角 / 任务栏图标换成本项目的图标（PCL 的窗口图标来自 WPF 内嵌资源，
         /// 改 exe 资源不会生效，只能在运行时替换）</summary>
+        private const string HomeBase = "http://127.0.0.1:8848/";
+
+        /// <summary>启动器启动时：按设置把陶瓦拉起来（服务端自己判断开关）</summary>
+        private static void AutoTerracotta()
+        {
+            try
+            {
+                AppDomain.CurrentDomain.ProcessExit += delegate
+                {
+                    try { Fetch(HomeBase + "tc?do=tc-autostop"); } catch { }
+                };
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    try { Thread.Sleep(1500); Fetch(HomeBase + "tc?do=tc-autostart"); }
+                    catch { }
+                });
+            }
+            catch { }
+        }
+
         private static void ApplyWindowIcon()
         {
             try
@@ -503,13 +524,13 @@ namespace PCLPatch
                             if (!Equals(cur0, on0)) pc.SetValue(fe, on0, null);
                             if (CheckHooked.Add(fe))
                             {
-                                System.Reflection.EventInfo ei = fe.GetType().GetEvent("Click");
-                                if (ei != null)
+                                // PCL.MyCheckBox 没有 Click 事件，用路由的鼠标抬起事件接管
+                                MouseButtonEventHandler mh = delegate(object s2, MouseButtonEventArgs e2)
                                 {
-                                    Action h = null;
-                                    h = delegate { try { RunAction(fe, "tc-tog:" + ck0); } catch (Exception ex) { Log(null, "chk err: " + ex.Message); } };
-                                    ei.AddEventHandler(fe, h);
-                                }
+                                    try { RunAction(fe, "tc-tog:" + ck0); }
+                                    catch (Exception ex) { Log(null, "chk err: " + ex.Message); }
+                                };
+                                fe.AddHandler(UIElement.MouseLeftButtonUpEvent, mh, true);
                             }
                             hit++;
                         }
