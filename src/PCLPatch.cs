@@ -693,6 +693,7 @@ namespace PCLPatch
                 try
                 {
                     if (action == "zan-toggle") { ToggleZan(fe); return; }
+                    if (action == "tc-pick") { PickTerracotta(fe); return; }
                     if (action == "zan-open") { OpenZan(fe); return; }
                     if (action == "tc-stop")
                     {
@@ -710,6 +711,29 @@ namespace PCLPatch
         }
 
         /// <summary>赞赏码折叠：点一下按钮，切换那张图片的显示 / 隐藏</summary>
+        /// <summary>浏览按钮：选 terracotta.exe 并把路径告诉服务端</summary>
+        private static void PickTerracotta(FrameworkElement fe)
+        {
+            try
+            {
+                Microsoft.Win32.OpenFileDialog dlg = new Microsoft.Win32.OpenFileDialog();
+                dlg.Title = "选择 terracotta.exe";
+                dlg.Filter = "陶瓦联机 (terracotta.exe)|terracotta.exe|可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*";
+                dlg.CheckFileExists = true;
+                bool? ok = dlg.ShowDialog();
+                if (ok != true || string.IsNullOrEmpty(dlg.FileName)) return;
+                State st = FindState(fe);
+                string baseUrl = (st != null && st.LiveBase != null) ? st.LiveBase : "http://127.0.0.1:8848/";
+                string url = baseUrl + "tc?do=tc-setpath&path=" + Uri.EscapeDataString(dlg.FileName);
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    try { string r = Fetch(url); Log(st, "setpath: " + r); } catch { }
+                });
+                if (st != null) st.LiveLast = null;
+            }
+            catch (Exception ex) { Log(null, "pick error: " + ex.Message); }
+        }
+
         private static void ToggleZan(FrameworkElement fe)
         {
             State st = FindState(fe);
