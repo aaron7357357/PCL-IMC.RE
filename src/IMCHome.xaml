@@ -1,0 +1,237 @@
+<local:MyImage Width="478" Height="140" HorizontalAlignment="Center" Margin="0,0,0,15"
+            Source="http://127.0.0.1:8848/banner/logo.png" EnableCache="True" />
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
+            <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
+                       Foreground="#FF233347" Text="服务器状态 · play.imc.re" />
+        <TextBlock Tag="live:on" TextWrapping="Wrap" Margin="0,0,0,4" FontWeight="Bold"
+                   Foreground="#67C23A" Visibility="Collapsed" Text="在线" />
+        <TextBlock Tag="live:off" TextWrapping="Wrap" Margin="0,0,0,4" FontWeight="Bold"
+                   Foreground="#F56C6C" Visibility="Collapsed" Text="离线" />
+        <TextBlock Tag="live:motd" TextWrapping="Wrap" Margin="0,0,0,4" Foreground="#FF233347"
+                   Text="正在连接服务器……" />
+        <TextBlock Tag="live:info" TextWrapping="Wrap" Margin="0,0,0,12" Foreground="#FF233347"
+                   Text="版本：—　在线：—" />
+        <Grid Margin="0,2,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" HorizontalAlignment="Stretch" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="服务器官网" EventType="打开网页" EventData="https://imc.re"
+                        ToolTip="在浏览器打开 IMC 服务器官网 https://imc.re" />
+            <local:MyButton Grid.Column="1" Tag="act:memopt" Margin="8,0,0,0" Height="35" Padding="12,0,12,0" ColorType="Highlight"
+                        Text="内存优化" ToolTip="清工作集 / 刷已修改页 / 清待命列表，和百宝箱里的「内存优化」一个效果" />
+        </Grid>
+        <TextBlock Tag="live:memtext" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7885" FontSize="11"
+                   Text="点一下「内存优化」释放被缓存占住的物理内存" />
+    </StackPanel>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="12" Margin="0,0,0,15">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <local:MyCard Title="按版本进服（点标题折叠 / 展开）" CanSwap="True" IsSwapped="False" Background="Transparent" HasMouseAnimation="False" Tag="glass">
+        <StackPanel Margin="22,40,22,12">
+            <TextBlock Tag="verhint" TextWrapping="Wrap" Margin="0,0,0,8" Foreground="#FF6B7885"
+                       Text="正在读取本机已安装的版本……" />
+            <StackPanel Tag="verrows" />
+        </StackPanel>
+    </local:MyCard>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
+            <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
+                       Foreground="#FF233347" Text="在线玩家" />
+        <TextBlock Tag="live:plist" TextWrapping="Wrap" Foreground="#FF233347"
+                   Text="正在读取玩家列表……" />
+    </StackPanel>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
+            <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
+                       Foreground="#FF233347" Text="加入 QQ 群" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF233347"
+                   Text="群号：607355046　imc公告群" />
+        <Grid Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" HorizontalAlignment="Stretch" Margin="0,0,4,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="复制imc公告群号" EventType="复制文本" EventData="607355046" ToolTip="点击复制群号，粘贴到 QQ 搜索即可找到群" />
+            <local:MyButton Grid.Column="1" HorizontalAlignment="Stretch" Margin="4,0,0,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="打开加群页" EventType="打开网页" EventData="https://qun.qq.com/" ToolTip="在浏览器打开 QQ 群官网；如有群邀请链接可替换此地址实现一键加群" />
+        </Grid>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF233347"
+                   Text="群号：1108248358　imc聊天群" />
+        <Grid Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" HorizontalAlignment="Stretch" Margin="0,0,4,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="复制imc聊天群号" EventType="复制文本" EventData="1108248358" ToolTip="点击复制群号，粘贴到 QQ 搜索即可找到群" />
+            <local:MyButton Grid.Column="1" HorizontalAlignment="Stretch" Margin="4,0,0,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="打开加群页" EventType="打开网页" EventData="https://qun.qq.com/" ToolTip="在浏览器打开 QQ 群官网；如有群邀请链接可替换此地址实现一键加群" />
+        </Grid>
+    </StackPanel>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
+            <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
+                       Foreground="#FF233347" Text="赞赏制作者" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10" Foreground="#FF233347"
+                   Text="如果这个启动器让你玩得开心，可以请作者喝杯奶茶。" />
+        <Grid Margin="0,2,0,10">
+            <local:MyButton Tag="act:zan-toggle" HorizontalAlignment="Stretch" Height="35"
+                        Padding="13,0,13,0" ColorType="Highlight"
+                        Text="展开赞赏码" ToolTip="展开 / 收起赞赏码" />
+        </Grid>
+        <local:MyImage Tag="act:zan-open" Width="220" Height="220" HorizontalAlignment="Left"
+                    Margin="0,0,0,6" Visibility="Collapsed"
+                    Source="http://127.0.0.1:8848/zan/zan.jpg" EnableCache="True"
+                    ToolTip="微信扫码赞赏；点击图片可在浏览器里放大" />
+        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12" Margin="0,2,0,0"
+                   Text="微信扫码赞赏 · 点图片可放大查看" />
+    </StackPanel>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
+            <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
+                       Foreground="#FF233347" Text="联系创作者" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" Foreground="#FF233347"
+                   Text="QQ：177436529" />
+        <Grid Margin="0,2,0,0">
+            <local:MyButton HorizontalAlignment="Stretch" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="复制 QQ 号" EventType="复制文本" EventData="177436529"
+                        ToolTip="点击复制，粘贴到 QQ 搜索就能加好友" />
+        </Grid>
+    </StackPanel>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
+            <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
+                       Foreground="#FF233347" Text="关于" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="这是什么" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="给 IMC.RE 服务器做的 PCL2 主页：把服务器实时状态、按版本进服、陶瓦联机都搬进启动器，打开就能看到，点一下就能进服，不用再开网页。" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="功能介绍" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 服务器状态：在线 / 离线、MOTD、版本、在线人数、延迟，每秒刷新" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 按版本进服：1.8 ~ 1.21.11 每个版本一行，「正版」连 on.imc.cab，「离线」连 off.imc.cab" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 联机 · 陶瓦：创建房间 / 复制联机码 / 加入房间 / 关闭联机，全程不弹网页；本机没装陶瓦时首次使用会自动下载安装" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 毛玻璃卡片：去掉 PCL 卡片自带的白底，能透出启动器背景图" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 折叠卡：版本列表、赞赏码都可以点标题 / 按钮收起，页面刷新时折叠状态不会丢" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="怎么用" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="1. 解压发布包，双击「启动主页服务（无窗口）.vbs」（占 8848 端口，无窗口）" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="2. 打开「改版PCL」里的启动器；用你自己的 PCL 就先运行一次「PCL2-主页补丁安装器」" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="3. 想开机自启，双击一次「安装开机自启.bat」" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="原理" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="页面 XAML 本身恒定不变，补丁每 0.5 秒从本机服务的 live.json 取数据，只改带 live 标记的控件，所以 PCL 不会重建页面，折叠和滚动都不会被打断。按钮通过 act 标记由补丁接管，直接调用陶瓦的本地接口。" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="关于授权" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="改版PCL 里的启动器基于官方开源版 PCL2 构建：没有修改 PCL 源码，只在初始化处注入一次补丁、并替换内置预设的主页。PCL 版权属于其作者。" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="主页服务、注入补丁、页面与安装器的源码使用 MIT 授权。" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="制作过程中使用的 AI" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 模型：DeepSeek-V4.1-Flash" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="· 工具：DeepSeek Harness（DeepSeek 的编码代理）" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
+                   Text="页面 XAML、主页服务（Python）、注入补丁（C#）都在 AI 协作下完成；需求、测试与验收由人负责。" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
+                   Text="反馈" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,0" Foreground="#FF6B7885" FontSize="12"
+                   Text="有问题或想法，欢迎到上面的 QQ 群，或直接加 QQ 177436529 反馈。" />
+    </StackPanel>
+</Border>
+

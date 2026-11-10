@@ -1,0 +1,54 @@
+<Border Tag="sec:create" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="12" Background="#D9FFFFFF">
+    <StackPanel Margin="22,16,22,18">
+        <TextBlock FontSize="17" FontWeight="Bold" Margin="0,0,0,4" Foreground="#FF233347" Text="创建房间" />
+        <TextBlock Margin="0,0,0,14" FontSize="12" Foreground="#FF6B7885" TextWrapping="Wrap" Text="两个人玩同一个版本的存档，不需要装 Mod，也不用端口映射。" />
+        <local:MyTextBox Tag="in:nick" Height="32" Margin="0,0,0,10" FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"
+                         HintText="联机昵称（可留空，留空用陶瓦默认昵称）" />
+        <TextBlock Tag="live:tc" TextWrapping="Wrap" Margin="0,0,0,10" FontWeight="Bold" Foreground="#FF233347" Text="正在检查陶瓦……" />
+        <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" Tag="act:tc-host|dis:tcenable" HorizontalAlignment="Stretch" Height="34" Margin="0,0,6,0" Padding="8,0,8,0" ColorType="Highlight" Text="创建房间" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-detach|dis:tcenable" HorizontalAlignment="Stretch" Height="34" Margin="0,0,6,0" Padding="8,0,8,0" ColorType="Highlight" Text="断开房间" />
+            <local:MyButton Grid.Column="2" Tag="act:tc-copy|dis:tccodeok" HorizontalAlignment="Stretch" Height="34" Padding="8,0,8,0" ColorType="Highlight" Text="复制邀请码" />
+        </Grid>
+        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
+                   Text="创建房间后，进单人存档按 ESC → 对局域网开放，就会生成邀请码；把邀请码发给朋友即可。" />
+    </StackPanel>
+</Border>
+<Border Tag="sec:join" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="12" Background="#D9FFFFFF">
+    <StackPanel Margin="22,16,22,18">
+        <TextBlock FontSize="17" FontWeight="Bold" Margin="0,0,0,4" Foreground="#FF233347" Text="加入房间" />
+        <TextBlock Margin="0,0,0,14" FontSize="12" Foreground="#FF6B7885" TextWrapping="Wrap" Text="输入朋友发给你的联机码，连上后游戏里会多出一个服务器地址。" />
+        <local:MyTextBox Tag="in:code" Height="32" Margin="0,0,0,10" FontSize="13" VerticalContentAlignment="Center" Padding="8,0,8,0"
+                         HintText="U/XXXX-XXXX-XXXX-XXXX" />
+        <TextBlock Tag="live:tc" TextWrapping="Wrap" Margin="0,0,0,10" FontWeight="Bold" Foreground="#FF233347" Text="正在检查陶瓦……" />
+        <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" Tag="act:tc-join|dis:tcenable" HorizontalAlignment="Stretch" Height="34" Margin="0,0,6,0" Padding="8,0,8,0" ColorType="Highlight" Text="加入房间" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-url|dis:tcurlok" HorizontalAlignment="Stretch" Height="34" Padding="8,0,8,0" ColorType="Highlight" Text="复制连接地址" />
+        </Grid>
+        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
+                   Text="加入成功后点「复制连接地址」，填进游戏的服务器地址即可进入对方世界。" />
+    </StackPanel>
+</Border>
+<Border Tag="sec:settings" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="12" Background="#D9FFFFFF">
+    <StackPanel Margin="22,16,22,18">
+        <TextBlock FontSize="17" FontWeight="Bold" Margin="0,0,0,4" Foreground="#FF233347" Text="设置" />
+        <TextBlock Margin="0,0,0,14" FontSize="12" Foreground="#FF6B7885" TextWrapping="Wrap" Text="陶瓦组件、路径和自动化选项。" />
+        <local:MyCheckBox Tag="chk:tcenable" Text="启用陶瓦联机" Checked="True" Margin="0,0,0,8" />
+        <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Tag="live:tcpath" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF6B7885" FontSize="12" Text="未找到 terracotta.exe" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-pick" Height="30" Margin="0,0,6,0" Padding="10,0,10,0" ColorType="Highlight" Text="浏览" />
+            <local:MyButton Grid.Column="2" Tag="act:tc-detect" Height="30" Padding="10,0,10,0" ColorType="Highlight" Text="自动检测" />
+        </Grid>
+        <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" Tag="act:tc-start|dis:tcenable" HorizontalAlignment="Stretch" Height="32" Margin="0,0,6,0" Padding="8,0,8,0" ColorType="Highlight" Text="启动组件" />
+            <local:MyButton Grid.Column="1" Tag="act:tc-stop|dis:tcrun" HorizontalAlignment="Stretch" Height="32" Padding="8,0,8,0" ColorType="Highlight" Text="停止组件" />
+        </Grid>
+        <local:MyCheckBox Tag="chk:tcauto" Text="启动启动器时自动启动" Checked="False" Margin="0,0,0,8" />
+        <local:MyCheckBox Tag="chk:tcfill" Text="联机成功后自动填入服务器地址" Checked="False" Margin="0,0,0,8" />
+        <local:MyCheckBox Tag="chk:tcstop" Text="退出启动器时停止陶瓦联机" Checked="False" Margin="0,0,0,0" />
+    </StackPanel>
+</Border>

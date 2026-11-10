@@ -11,6 +11,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -83,6 +84,8 @@ namespace PCLPatch
                     int ms = ReadIntervalMs();
                     LoadWindowIcon();   // 先准备好窗口图标，tick 里再套上去
                     AutoTerracotta();   // 开了「启动启动器时自动启动」就把陶瓦拉起来
+                    TcNative.LogHook = delegate(string m) { TryLog(m); };
+                    AutoTerracottaNative();
                     // ShowSplash(st);  // 加载画面已改为直接替换 exe 内嵌图标，这里不再需要
                     Log(st, "install: interval=" + ms + "ms, LoadContent=" + (st.LoadContent != null)
                         + ", SettingsGet=" + (st.SettingsGet != null)
@@ -274,6 +277,29 @@ namespace PCLPatch
         private const string HomeBase = "http://127.0.0.1:8848/";
 
         /// <summary>启动器启动时：按设置把陶瓦拉起来（服务端自己判断开关）</summary>
+        private static int _nativeHookDone;
+        private static void AutoTerracottaNative()
+        {
+            if (Interlocked.CompareExchange(ref _nativeHookDone, 1, 0) != 0) return;
+            try
+            {
+                TcNative.LoadSettings();
+                if (TcNative.AutoStart && TcNative.Enable)
+                {
+                    ThreadPool.QueueUserWorkItem(delegate
+                    {
+                        Thread.Sleep(1500);
+                        try { if (TcNative.ExePath() != null) TcNative.Start(); } catch { }
+                    });
+                }
+                AppDomain.CurrentDomain.ProcessExit += delegate
+                {
+                    try { if (TcNative.AutoStop && TcNative.Running()) TcNative.Stop(); } catch { }
+                };
+            }
+            catch { }
+        }
+
         private static void AutoTerracotta()
         {
             try
@@ -334,17 +360,36 @@ namespace PCLPatch
                 HideSplashIfReady(st);
                 if (st.ImgLog < 2) { st.ImgLog++; DumpImages(st); }
                 ApplyWindowIcon();
+                EnsureLinkNav(st);
+                EnsureLinkPage(st);
+                HookLeftPage(st);
+                GlassTick++;
+                if (GlassTick == 10 && File.Exists(Path.Combine(AppDir(), "PCL", "link-autoshow.txt")))
+                {
+                    Window wa = Application.Current == null ? null : Application.Current.MainWindow;
+                    FrameworkElement ra = wa == null ? null : FindByName(wa, "BtnTitleSelect2");
+                    MethodInfo sa = ra == null ? null : ra.GetType().GetMethod("SetChecked", new Type[] { typeof(bool), typeof(bool), typeof(bool) });
+                    if (sa != null) { sa.Invoke(ra, new object[] { true, true, false }); Log(st, "link: autoshow at tick10"); }
+                }
+                if (IsGlassAll()) ApplyGlassAll(st);   // imc-glass.txt=1 时才动   // 每个 tick 都套一遍，切页/启动时几乎立刻就是毛玻璃
+                // EnsureGlassSwitch(st);  // 内测：个性化里的毛玻璃开关先不插
                 // 左侧栏注入已关闭：PCL 左边栏是它自己的 Grid，硬插会把「版本选择」挤出可视区，
-                if (st.Page == null || !((UIElement)st.Page).IsVisible) return;
+                if (st.Page == null) return;
+                bool pageVisible = ((UIElement)st.Page).IsVisible;
 
                 // 毛玻璃处理要在任何模式（联网 / 本地文件 / 预设）下都跑一遍，
                 // 否则切到预设模式时卡片会露出 PCL 自带的白色底。
                 // 注意不能只做一次：按 F5 刷新主页后 PCL 会重建控件，新实例又带回白底，
                 // 所以每次 tick 都过一遍（函数内部只对“还没处理过”的控件赋值，开销很小）。
-                st.Styled = StyleGlassCards(st);
+                if (pageVisible) st.Styled = StyleGlassCards(st);
 
                 // 实时数据：三种模式都跑。页面本身恒定，只有带 Tag="live:*" 的控件改文字。
                 StartLive(st);
+                ApplyPresetOnce(st);
+                EnsurePresetItem(st);
+                EnsureImcPreset(st);
+                EnsureVersionRows(st);
+                if (!pageVisible) return;
 
                 object typeValue = GetSetting(st, "UiCustomType");
                 if (!(typeValue is int) || (int)typeValue != 2) return;
@@ -372,6 +417,31 @@ namespace PCLPatch
         /// </summary>
         private static void StartLive(State st)
         {
+            if (IsNativePreset(st))
+            {
+                if (Interlocked.CompareExchange(ref st.LiveBusy, 1, 0) != 0) return;
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    try
+                    {
+                        if (TcNative.AutoFill && TcNative.Running())
+                        {
+                            string tcUrlNow = TcNative.Url();
+                            if (!string.IsNullOrEmpty(tcUrlNow) && tcUrlNow != _lastFilledUrl)
+                            {
+                                int n = TcNative.PutServer("陶瓦联机", tcUrlNow);
+                                if (n > 0) { _lastFilledUrl = tcUrlNow; Log(st, "tc autofill: " + n + " files"); }
+                            }
+                        }
+                        string json = ImcNative.BuildLiveJson();
+                        ((DispatcherObject)st.Page).Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                            new Action(delegate { ApplyLive(st, json); }));
+                    }
+                    catch { }
+                    finally { Interlocked.Exchange(ref st.LiveBusy, 0); }
+                });
+                return;
+            }
             string url = DeriveLiveUrl(st);
             if (url == null) return;
             if (Interlocked.CompareExchange(ref st.LiveBusy, 1, 0) != 0) return;
@@ -420,10 +490,12 @@ namespace PCLPatch
                 Dictionary<string, string> d = ParseFlatJson(json);
                 if (d == null || d.Count == 0) return;
                 Panel host = st.PanCustom.GetValue(st.Page) as Panel;
-                if (host == null) { Log(st, "live: PanCustom is not Panel"); return; }
+                // 联机页显示时自定义主页是隐藏的，PanCustom 可能拿不到，不能在这里直接 return
                 string status;
                 if (!d.TryGetValue("status", out status)) status = "";
-                int touched = WalkLive(host, d, status);
+                int touched = 0;
+                if (host != null) touched += WalkLive(host, d, status);
+                if (TeraPage != null) touched += WalkLive(TeraPage, d, status);
                 // 左侧栏那行小字跟着「内存优化」的实时状态走
                 try
                 {
@@ -770,6 +842,851 @@ namespace PCLPatch
             catch (Exception ex) { Log(st, "sidebar error: " + ex); }
         }
 
+        // ---------------- 「联机」页：陶瓦面板 ----------------
+        // 官方 exe 里本来就有 PCL.PageLinkMain（第 3 个导航项 BtnTitleSelect2），只是默认隐藏。
+        // 这里把那个真页面放出来，再把它的内容换成我们的陶瓦面板。
+
+        private static FrameworkElement TeraPage;
+        private static FrameworkElement TeraPrev;
+        private static FrameworkElement TeraWrap;
+        private static bool LinkNavDone;
+        private static string PendingSection;
+        private static string LastSection = "create";
+        private static FrameworkElement LinkNav;
+
+
+        private static bool LeftHookDone;
+        private static bool LinkAnimDone;
+        private static bool WasOnLink;
+        private static Panel SidebarPanel;
+
+        private static void HookLeftPage(State st)
+        {
+            if (LeftHookDone) return;
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            Border left = FindByName(w, "PanMainLeft") as Border;
+            if (left == null) return;
+            LeftHookDone = true;
+            try
+            {
+                // PCL 换页时会重新 New MyPageLeft 并塞进 PanMainLeft.Child，
+                // 布局一更新就把侧栏补进去，赶在它 30ms 后触发动画之前，动画才是官方的滑入效果
+                left.LayoutUpdated += delegate
+                {
+                    try
+                    {
+                        FrameworkElement c = left.Child as FrameworkElement;
+                        if (c == null || c.GetType().Name != "MyPageLeft") return;
+                        Panel host = c as Panel;
+                        if (host == null || host.Children.Count > 0) return;
+                        Border r = FindByName(w, "PanMainRight") as Border;
+                        FrameworkElement rc = r == null ? null : r.Child as FrameworkElement;
+                        if (rc == null || rc.GetType().Name != "PageLinkMain") return;
+                        BuildLinkSidebar(st);
+                    }
+                    catch { }
+                };
+                Log(st, "link: left page layout hook installed");
+            }
+            catch (Exception ex) { Log(st, "link hook error: " + ex.Message); }
+        }
+
+        // ---------------- 「imc.re主页」预设 ----------------
+        // 在个性化 → 主页 → 主页预设 里加一项「imc.re主页」，选中后由我们加载本机服务的主页。
+
+        private static bool PresetItemAdded;
+        private static bool ImcPresetLoaded;
+
+        // ---------------- 首次启动自动套用我们的主页预设 ----------------
+
+        private static bool _presetOnce;
+        private static void ApplyPresetOnce(State st)
+        {
+            if (_presetOnce) return;
+            _presetOnce = true;
+            try
+            {
+                string marker = Path.Combine(AppDir(), "PCL", "imc-preset-once.txt");
+                if (File.Exists(marker)) return;
+                object preset = GetSetting(st, "UiCustomPreset");
+                int pv = preset is int ? (int)preset : -1;
+                if (pv != 99)
+                {
+                    SetSetting(st, "UiCustomType", 3);
+                    SetSetting(st, "UiCustomPreset", 99);
+                    WriteIniPreset();
+                    // 立刻让主页按新设置重载，不用等下一次启动
+                    try
+                    {
+                        MethodInfo refresh = st.Page.GetType().GetMethod("Refresh", BindingFlags.Instance | BindingFlags.NonPublic);
+                        if (refresh != null) refresh.Invoke(st.Page, null);
+                    }
+                    catch { }
+                    Log(st, "preset: 首次启动自动套用 imc.re主页 (was " + pv + ")");
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(marker));
+                File.WriteAllText(marker, "1");
+            }
+            catch (Exception ex) { Log(st, "preset once error: " + ex.Message); }
+        }
+
+        private static void WriteIniPreset()
+        {
+            try
+            {
+                string ini = Path.Combine(AppDir(), "PCL", "Setup.ini");
+                Directory.CreateDirectory(Path.GetDirectoryName(ini));
+                List<string> lines = File.Exists(ini) ? new List<string>(File.ReadAllLines(ini, Encoding.UTF8)) : new List<string>();
+                bool hasType = false, hasPreset = false;
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    if (lines[i].StartsWith("UiCustomType:")) { lines[i] = "UiCustomType:3"; hasType = true; }
+                    else if (lines[i].StartsWith("UiCustomPreset:")) { lines[i] = "UiCustomPreset:99"; hasPreset = true; }
+                }
+                if (!hasType) lines.Add("UiCustomType:3");
+                if (!hasPreset) lines.Add("UiCustomPreset:99");
+                File.WriteAllLines(ini, lines.ToArray(), new UTF8Encoding(false));
+            }
+            catch (Exception ex) { TryLog("write ini failed: " + ex.Message); }
+        }
+
+        private static void SetSetting(State st, string key, int value)
+        {
+            try
+            {
+                Type settings = st.Page.GetType().Assembly.GetType("PCL.Settings");
+                if (settings == null) { TryLog("Settings type missing"); return; }
+                MethodInfo safe = null;
+                foreach (MethodInfo m in settings.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (m.Name != "SetSafe") continue;
+                    ParameterInfo[] ps = m.GetParameters();
+                    if (ps.Length == 3 && ps[0].ParameterType == typeof(string)) { safe = m; break; }
+                }
+                if (safe == null) { TryLog("SetSafe missing"); return; }
+                safe.Invoke(null, new object[] { key, value, null });
+                TryLog("setting applied: " + key + "=" + value);
+            }
+            catch (Exception ex)
+            {
+                Exception inner = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
+                TryLog("set setting failed: " + inner.Message);
+            }
+        }
+
+        private static void EnsurePresetItem(State st)
+        {
+            if (PresetItemAdded) return;
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            ComboBox combo = FindPresetCombo(w);
+            if (combo == null) return;
+            PresetItemAdded = true;
+            try
+            {
+                Assembly asm = w.GetType().Assembly;
+                Type itemType = asm.GetType("PCL.MyComboBoxItem");
+                if (itemType == null) { Log(st, "preset: MyComboBoxItem missing"); return; }
+                object item = Activator.CreateInstance(itemType);
+                PropertyInfo cp = itemType.GetProperty("Content");
+                if (cp != null) cp.SetValue(item, "imc.re主页", null);
+                Type ss = asm.GetType("PCL.SettingService");
+                if (ss != null)
+                {
+                    FieldInfo vp = ss.GetField("ValueProperty", BindingFlags.Public | BindingFlags.Static);
+                    if (vp != null)
+                    {
+                        object dp = vp.GetValue(null);
+                        ((DependencyObject)item).SetValue((DependencyProperty)dp, "99");
+                    }
+                }
+                combo.Items.Add(item);
+                Log(st, "preset: imc.re主页 added");
+            }
+            catch (Exception ex) { Log(st, "preset add error: " + ex.Message); }
+        }
+
+        private static ComboBox FindPresetCombo(DependencyObject root)
+        {
+            try
+            {
+                int n = VisualTreeHelper.GetChildrenCount(root);
+                for (int i = 0; i < n; i++)
+                {
+                    DependencyObject c = VisualTreeHelper.GetChild(root, i);
+                    ComboBox cb = c as ComboBox;
+                    if (cb != null && cb.GetType().FullName == "PCL.MyComboBox")
+                    {
+                        Type ss = cb.GetType().Assembly.GetType("PCL.SettingService");
+                        if (ss != null)
+                        {
+                            FieldInfo kp = ss.GetField("KeyProperty", BindingFlags.Public | BindingFlags.Static);
+                            if (kp != null)
+                            {
+                                object key = cb.GetValue((DependencyProperty)kp.GetValue(null));
+                                if (key is string && (string)key == "UiCustomPreset") return cb;
+                            }
+                        }
+                    }
+                    ComboBox found = FindPresetCombo(c);
+                    if (found != null) return found;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static string GetEmbeddedText(string name)
+        {
+            try
+            {
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+                {
+                    if (s == null) return null;
+                    using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                        return r.ReadToEnd();
+                }
+            }
+            catch { return null; }
+        }
+
+        private static string GetEmbeddedPage()
+        {
+            try
+            {
+                Assembly asm = Assembly.GetExecutingAssembly();
+                using (Stream s = asm.GetManifestResourceStream("IMCHome.xaml"))
+                {
+                    if (s == null) return null;
+                    using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                        return r.ReadToEnd();
+                }
+            }
+            catch { return null; }
+        }
+
+        private static bool IsNativePreset(State st)
+        {
+            object t = GetSetting(st, "UiCustomType");
+            object p = GetSetting(st, "UiCustomPreset");
+            return t is int && (int)t == 3 && p is int && (int)p == 99;
+        }
+
+        // ---------------- 「按版本进服」动态行 ----------------
+
+        private static string _verSig;
+        private static DateTime _verScanTime = DateTime.MinValue;
+        private static List<string> _verCache = new List<string>();
+
+        private static readonly List<FileSystemWatcher> _verWatchers = new List<FileSystemWatcher>();
+
+        /// <summary>盯着 versions 目录，有增删改名就立刻让缓存失效（下一 tick 重新扫描）。</summary>
+        private static void EnsureVersionWatchers(List<string> roots)
+        {
+            if (_verWatchers.Count > 0) return;
+            foreach (string dir in roots)
+            {
+                try
+                {
+                    if (!Directory.Exists(dir)) continue;
+                    FileSystemWatcher w = new FileSystemWatcher(dir);
+                    w.IncludeSubdirectories = false;
+                    w.NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName;
+                    FileSystemEventHandler h = delegate { _verScanTime = DateTime.MinValue; };
+                    w.Created += h;
+                    w.Deleted += h;
+                    w.Renamed += delegate { _verScanTime = DateTime.MinValue; };
+                    w.EnableRaisingEvents = true;
+                    _verWatchers.Add(w);
+                    Log(null, "versions watcher: " + dir);
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>排序：数字版本在上，英文名其次，中文名最后；数字版本按版本号从新到旧。</summary>
+        private static int CompareVersionNames(string a, string b)
+        {
+            int ga = VersionGroup(a), gb = VersionGroup(b);
+            if (ga != gb) return ga.CompareTo(gb);
+            if (ga == 0)
+            {
+                int[] va = VersionNumbers(a), vb = VersionNumbers(b);
+                for (int i = 0; i < 3; i++)
+                {
+                    int x = i < va.Length ? va[i] : 0;
+                    int y = i < vb.Length ? vb[i] : 0;
+                    if (x != y) return y.CompareTo(x);   // 新的在前
+                }
+            }
+            return string.CompareOrdinal(a, b);
+        }
+
+        private static int VersionGroup(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return 2;
+            char c = name[0];
+            if (c >= '0' && c <= '9') return 0;          // 数字版本 / 数字开头
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return 1;  // 英文整合包
+            return 2;                                     // 中文等
+        }
+
+        private static int[] VersionNumbers(string name)
+        {
+            Match m = Regex.Match(name, "(\\d+)\\.(\\d+)(?:\\.(\\d+))?");
+            if (!m.Success) return new int[] { 0, 0, 0 };
+            int a = int.Parse(m.Groups[1].Value);
+            int b = int.Parse(m.Groups[2].Value);
+            int c = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+            return new int[] { a, b, c };
+        }
+
+        private static List<string> ScanVersions()
+        {
+            if ((DateTime.Now - _verScanTime).TotalSeconds < 1.5) return _verCache;
+            _verScanTime = DateTime.Now;
+            List<string> names = new List<string>();
+            List<string> roots = new List<string>();
+            try { roots.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".minecraft", "versions")); } catch { }
+            try { roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "versions")); } catch { }
+            EnsureVersionWatchers(roots);
+            foreach (string dir in roots)
+            {
+                try
+                {
+                    if (!Directory.Exists(dir)) continue;
+                    foreach (string sub in Directory.GetDirectories(dir))
+                    {
+                        string name = Path.GetFileName(sub);
+                        string jsonPath = Path.Combine(sub, name + ".json");
+                        if (!File.Exists(jsonPath)) continue;
+                        // 优先用 JSON 里的 clientVersion（整合包的名字里往往没有版本号）
+                        string mcVersion = "";
+                        try
+                        {
+                            string text = File.ReadAllText(jsonPath, Encoding.UTF8);
+                            Match m = Regex.Match(text, "\"clientVersion\"\\s*:\\s*\"([^\"]+)\"");
+                            if (m.Success) mcVersion = m.Groups[1].Value;
+                        }
+                        catch { }
+                        string probe = string.IsNullOrEmpty(mcVersion) ? name : mcVersion;
+                        if (InRange(probe) && !names.Contains(name)) names.Add(name);
+                    }
+                }
+                catch { }
+            }
+            names.Sort(CompareVersionNames);
+            _verCache = names;
+            return names;
+        }
+
+        /// <summary>把版本名里的数字提出来比较，判断是否落在 1.8 ~ 1.21.11。</summary>
+        private static bool InRange(string name)
+        {
+            Match m = Regex.Match(name, "(\\d+)\\.(\\d+)(?:\\.(\\d+))?");
+            if (!m.Success) return false;
+            int major = int.Parse(m.Groups[1].Value);
+            int minor = int.Parse(m.Groups[2].Value);
+            int patch = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+            if (major != 1) return false;
+            if (minor < 8) return false;
+            if (minor > 21) return true;
+            if (minor < 21) return true;
+            return patch <= 11;
+        }
+
+        private static FrameworkElement FindByTagName(DependencyObject root, string tag)
+        {
+            FrameworkElement fe = root as FrameworkElement;
+            if (fe != null && (fe.Tag as string) == tag) return fe;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                FrameworkElement hit = FindByTagName(VisualTreeHelper.GetChild(root, i), tag);
+                if (hit != null) return hit;
+            }
+            return null;
+        }
+
+        private static void EnsureVersionRows(State st)
+        {
+            if (!IsNativePreset(st)) return;
+            Panel host = st.PanCustom == null ? null : st.PanCustom.GetValue(st.Page) as Panel;
+            if (host == null) return;
+            FrameworkElement holder = FindByTagName(host, "verrows");
+            Panel rowsPanel = holder as Panel;
+            if (rowsPanel == null) return;
+            List<string> vers = ScanVersions();
+            List<string> all = vers;
+            string sig = string.Join("|", vers.ToArray());
+            if (sig == _verSig && rowsPanel.Children.Count > 0) return;
+            _verSig = sig;
+            try
+            {
+                TextBlock hint = FindByTagName(host, "verhint") as TextBlock;
+                if (hint != null)
+                {
+                    if (all.Count == 0) hint.Text = "没扫描到本机已安装的游戏版本，可用左侧的「启动游戏」进入。";
+                    else if (vers.Count == 0) hint.Text = "已装版本里没有 1.8~1.21.11 的版本，可用左侧的「启动游戏」进入。";
+                    else hint.Text = "正版点「正版」，离线点「离线」；只列 1.8~1.21.11 的版本（" + vers.Count + " 个）。";
+                }
+                rowsPanel.Children.Clear();
+                if (vers.Count == 0) return;
+                StringBuilder sb = new StringBuilder();
+                sb.Append("<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" ");
+                sb.Append("xmlns:local=\"clr-namespace:PCL;assembly=Plain Craft Launcher 2\" ");
+                sb.Append("xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">");
+                foreach (string v in vers) sb.Append(VersionRowXaml(v));
+                sb.Append("</StackPanel>");
+                object obj = st.GetObjectFromXML.Invoke(null, new object[] { sb.ToString() });
+                Panel built = obj as Panel;
+                if (built == null) return;
+                rowsPanel.Children.Add(built);
+                Log(st, "versions: " + vers.Count + " rows");
+            }
+            catch (Exception ex)
+            {
+                Exception inner = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
+                Log(st, "versions build error: " + inner.Message);
+            }
+        }
+
+        private static string XmlEsc(string v)
+        {
+            return (v ?? "").Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+        }
+
+        private static string VersionRowXaml(string name)
+        {
+            string shortName = name.Length <= 16 ? name : name.Substring(0, 15) + "…";
+            string esc = XmlEsc(name);
+            string eshort = XmlEsc(shortName);
+            return "<Grid Margin=\"0,0,0,6\">" +
+                "<Grid.ColumnDefinitions><ColumnDefinition Width=\"150\" /><ColumnDefinition Width=\"*\" /><ColumnDefinition Width=\"*\" /></Grid.ColumnDefinitions>" +
+                "<TextBlock Grid.Column=\"0\" VerticalAlignment=\"Center\" Text=\"" + eshort + "\" ToolTip=\"" + esc + "\" Foreground=\"#FF233347\" />" +
+                "<local:MyButton Grid.Column=\"1\" HorizontalAlignment=\"Stretch\" Height=\"32\" Margin=\"0,0,4,0\" Padding=\"10,0,10,0\" ColorType=\"Highlight\" Text=\"正版\" EventType=\"启动游戏\" EventData=\"" + esc + "|on.imc.cab\" ToolTip=\"用 " + esc + " 进入 on.imc.cab（正版账号）\" />" +
+                "<local:MyButton Grid.Column=\"2\" HorizontalAlignment=\"Stretch\" Height=\"32\" Margin=\"4,0,0,0\" Padding=\"10,0,10,0\" ColorType=\"Highlight\" Text=\"离线\" EventType=\"启动游戏\" EventData=\"" + esc + "|off.imc.cab\" ToolTip=\"用 " + esc + " 进入 off.imc.cab（离线账号）\" />" +
+                "</Grid>";
+        }
+
+        private static void EnsureImcPreset(State st)
+        {
+            object typeValue = GetSetting(st, "UiCustomType");
+            object presetValue = GetSetting(st, "UiCustomPreset");
+            bool on = typeValue is int && (int)typeValue == 3 && presetValue is int && (int)presetValue == 99;
+            if (!on) { ImcPresetLoaded = false; return; }
+            Panel host = st.PanCustom == null ? null : st.PanCustom.GetValue(st.Page) as Panel;
+            if (host == null) return;
+            if (ImcPresetLoaded && host.Children.Count > 0) return;
+            try
+            {
+                string content = GetEmbeddedPage();
+                if (string.IsNullOrEmpty(content)) return;
+                string xaml = "<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+                              "xmlns:sys=\"clr-namespace:System;assembly=mscorlib\" " +
+                              "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+                              "xmlns:local=\"clr-namespace:PCL;assembly=Plain Craft Launcher 2\" " +
+                              "xmlns:core=\"clr-namespace:MeloongCore;assembly=MeloongCore\" " +
+                              "xmlns:corewpf=\"clr-namespace:MeloongCore.Wpf;assembly=MeloongCore.Wpf\">" + content + "</StackPanel>";
+                object obj = st.GetObjectFromXML.Invoke(null, new object[] { xaml });
+                Panel page = obj as Panel;
+                if (page == null) return;
+                host.Children.Clear();
+                host.Children.Add(page);
+                ImcPresetLoaded = true;
+                _verSig = null;
+                Log(st, "preset: imc.re主页 loaded");
+            }
+            catch (Exception ex)
+            {
+                Exception inner = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
+                Log(st, "preset load error: " + inner.Message);
+            }
+        }
+
+        private static void EnsureLinkNav(State st)
+        {
+            if (LinkNavDone) return;
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            FrameworkElement sel = FindByName(w, "PanTitleSelect");
+            Panel sp = sel as Panel;
+            FrameworkElement real = FindByName(w, "BtnTitleSelect2");
+            if (sp == null || real == null) return;
+            LinkNavDone = true;
+            try
+            {
+                // 自己插一个看得见的「联机」；点它去勾 PCL 自带的（隐藏的）联机按钮，走 PCL 真正的切页流程
+                object nav = Activator.CreateInstance(real.GetType());
+                FrameworkElement fe = nav as FrameworkElement;
+                if (fe == null) { Log(st, "link: cannot create nav"); return; }
+                SetProp(nav, "Text", "联机");
+                SetProp(nav, "Tag", "2");
+                SetProp(nav, "Logo", "M512 817c-48.601 0-88-39.399-88-88s39.399-88 88-88 88 39.399 88 88-39.399 88-88 88zM237.671 565.74C308.335 474.58 397.369 429 504.774 429c118.433 0 214.225 55.421 287.377 166.264l-53.407 30.369c-13.84 7.87-31.362 4.367-41.114-8.219-50.291-64.911-114.577-97.367-192.856-97.367-86.851 0-156.835 40.318-209.95 120.953l-47.995-28.02c-15.263-8.91-20.412-28.507-11.502-43.77a32 32 0 0 1 2.344-3.47zM107.691 419.47C205.24 278.491 337.805 208 505.379 208c178.77 0 317.694 80.224 416.772 240.672l-56.54 31.73c-13.686 7.68-30.922 4.303-40.697-7.975C735.581 360.213 629.07 303.009 505.38 300.815 373.997 298.485 261.637 362.88 168.3 494l-50.116-28.505c-15.362-8.738-20.732-28.275-11.994-43.637a32 32 0 0 1 1.5-2.387z");
+                SetPropDouble(nav, "LogoScale", 1.05);
+                fe.Margin = new Thickness(5, 0, 5, 0);
+                fe.Height = 27;
+                fe.VerticalAlignment = VerticalAlignment.Center;
+                fe.AddHandler(UIElement.MouseLeftButtonUpEvent,
+                    new MouseButtonEventHandler(delegate(object s2, MouseButtonEventArgs e2)
+                    {
+                        try
+                        {
+                            Window mw = Application.Current == null ? null : Application.Current.MainWindow;
+                            FrameworkElement r2 = mw == null ? null : FindByName(mw, "BtnTitleSelect2");
+                            MethodInfo sc = r2 == null ? null : r2.GetType().GetMethod("SetChecked", new Type[] { typeof(bool), typeof(bool), typeof(bool) });
+                            if (sc != null) sc.Invoke(r2, new object[] { true, true, false });
+                            MethodInfo sc3 = fe.GetType().GetMethod("SetChecked", new Type[] { typeof(bool), typeof(bool), typeof(bool) });
+                            if (sc3 != null) sc3.Invoke(fe, new object[] { true, false, false });
+                            ShowSection(st, LastSection);   // 再次点联机时回到上次看的分栏
+                        }
+                        catch (Exception ex) { Log(st, "link nav click error: " + ex.Message); }
+                    }), true);
+                int idx = Math.Min(2, sp.Children.Count);
+                sp.Children.Insert(idx, fe);
+                LinkNav = fe;
+                Log(st, "link: custom nav inserted at " + idx);
+
+            }
+            catch (Exception ex) { Log(st, "link nav error: " + ex.Message); }
+        }
+
+        private static void EnsureLinkPage(State st)
+        {
+            if (TeraWrap != null)
+            {
+                Window w0 = Application.Current == null ? null : Application.Current.MainWindow;
+                Border r0 = w0 == null ? null : FindByName(w0, "PanMainRight") as Border;
+                FrameworkElement c0 = r0 == null ? null : r0.Child as FrameworkElement;
+                bool onLink = c0 != null && c0.GetType().Name == "PageLinkMain";
+                if (!onLink) LinkAnimDone = false;
+                if (onLink)
+                {
+                    BuildLinkSidebar(st);
+                    // 只在刚进入联机页那一下勾选一次；之后不要再动，否则会跟 PCL 自己的单选框打架
+                    if (!WasOnLink && LinkNav != null) SetNavChecked(LinkNav, true);
+                }
+                WasOnLink = onLink;
+                if (onLink && PendingSection != null && TeraPage != null)
+                {
+                    ShowSection(st, PendingSection);
+                    PendingSection = null;
+                }
+                return;
+            }
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            try
+            {
+                Assembly asm = w.GetType().Assembly;
+                Type modMain = asm.GetType("PCL.ModMain");
+                FieldInfo fi = modMain == null ? null : modMain.GetField("FrmLinkMain", BindingFlags.Public | BindingFlags.Static);
+                if (fi == null) { Log(st, "link: FrmLinkMain field not found"); return; }
+                object pageObj = fi.GetValue(null);
+                if (pageObj == null)
+                {
+                    // PCL 第一次点「联机」才 New PageLinkMain，这里提前建好并包装，
+                    // 免得点进去先闪一下它自己的页面再换成我们的
+                    Type pt = asm.GetType("PCL.PageLinkMain");
+                    if (pt == null) return;
+                    pageObj = Activator.CreateInstance(pt);
+                    fi.SetValue(null, pageObj);
+                    Log(st, "link: page pre-created");
+                }
+                Decorator page = pageObj as Decorator;
+                if (page == null) return;
+                if (TeraPage == null)
+                {
+                    TeraPage = BuildTeraPage(st);
+                    if (TeraPage == null) return;
+                }
+                FrameworkElement orig = page.Child as FrameworkElement;
+                if (orig == null) return;
+                page.Child = null;                 // 断开 PCL 自己那套页面内容
+                page.Child = TeraPage;             // 直接把我们的面板塞进去
+                orig.Visibility = Visibility.Collapsed;
+                TeraPage.Visibility = Visibility.Visible;
+                TeraPrev = orig;
+                TeraWrap = page;
+                Log(st, "link: page pre-wrapped");
+                if (!string.IsNullOrEmpty(st.LiveLast)) ApplyLive(st, st.LiveLast);
+            }
+            catch (Exception ex) { Log(st, "link page error: " + ex.Message); }
+        }
+
+        private static void SetNavChecked(FrameworkElement nav, bool on)
+        {
+            try
+            {
+                MethodInfo sc = nav.GetType().GetMethod("SetChecked", new Type[] { typeof(bool), typeof(bool), typeof(bool) });
+                if (sc != null) sc.Invoke(nav, new object[] { on, false, false });
+            }
+            catch { }
+        }
+
+        private static Panel listForAnim(Panel root)
+        {
+            if (root.Children.Count == 1 && root.Children[0] is Panel) return (Panel)root.Children[0];
+            return root;
+        }
+
+        private static bool OtherNavChecked(Window w)
+        {
+            try
+            {
+                FrameworkElement sel = FindByName(w, "PanTitleSelect");
+                Panel sp = sel as Panel;
+                if (sp == null) return false;
+                foreach (UIElement c in sp.Children)
+                {
+                    FrameworkElement fe = c as FrameworkElement;
+                    if (fe == null || fe == LinkNav) continue;
+                    PropertyInfo cp = fe.GetType().GetProperty("Checked");
+                    if (cp != null)
+                    {
+                        object v = cp.GetValue(fe, null);
+                        if (v is bool && (bool)v) return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static void PlaySidebarAnimOnce(State st)
+        {
+            if (LinkAnimDone) return;
+            if (SidebarPanel == null) return;
+            LinkAnimDone = true;
+            Panel listA = SidebarPanel;
+            Dispatcher dsp = ((DispatcherObject)listA).Dispatcher;
+            // PCL 会先把左侧页 Opacity 设 0，30ms 后才设 1 并播它自己的动画。
+            // 我们等它真正可见（Opacity≈1）再播条目动画，否则动画在不可见的页面里就跑完了。
+            DispatcherTimer timer = null;
+            int tries = 0;
+            timer = new DispatcherTimer(DispatcherPriority.Background, dsp);
+            timer.Interval = TimeSpan.FromMilliseconds(30);
+            timer.Tick += delegate
+            {
+                tries++;
+                FrameworkElement page = null;
+                try
+                {
+                    Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                    Border left = w == null ? null : FindByName(w, "PanMainLeft") as Border;
+                    page = left == null ? null : left.Child as FrameworkElement;
+                }
+                catch { }
+                bool visible = page != null && page.Opacity > 0.85;
+                if (!visible && tries < 12) return;
+                timer.Stop();
+                try { RunSidebarAnim(st, listA); } catch (Exception ex) { Log(st, "link anim error: " + ex.Message); }
+            };
+            timer.Start();
+        }
+
+        private static void RunSidebarAnim(State st, Panel root)
+        {
+            Panel listB = root;
+            if (listB.Children.Count == 1 && listB.Children[0] is Panel) listB = (Panel)listB.Children[0];
+            int idA = 0, delayA = 0;
+            foreach (UIElement c1 in listB.Children)
+            {
+                FrameworkElement ea = c1 as FrameworkElement;
+                if (ea == null) continue;
+                ea.Opacity = 0;
+                TranslateTransform tta = new TranslateTransform(-25, 0);
+                ea.RenderTransform = tta;
+                double target = ea is TextBlock ? 0.6 : 1;
+                DoubleAnimation fa = new DoubleAnimation(0, target, TimeSpan.FromMilliseconds(100));
+                fa.BeginTime = TimeSpan.FromMilliseconds(delayA);
+                fa.EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+                ea.BeginAnimation(UIElement.OpacityProperty, fa);
+                DoubleAnimation ma = new DoubleAnimation(-25, -20, TimeSpan.FromMilliseconds(200));
+                ma.BeginTime = TimeSpan.FromMilliseconds(delayA);
+                ma.EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+                tta.BeginAnimation(TranslateTransform.XProperty, ma);
+                DoubleAnimation mb = new DoubleAnimation(-20, 0, TimeSpan.FromMilliseconds(300));
+                mb.BeginTime = TimeSpan.FromMilliseconds(delayA + 200);
+                mb.EasingFunction = new BackEase { Amplitude = 0.25, EasingMode = EasingMode.EaseOut };
+                tta.BeginAnimation(TranslateTransform.XProperty, mb);
+                delayA += Math.Max(15 - idA, 7) * 2;
+                idA++;
+            }
+            Log(st, "link: sidebar animation played");
+        }
+
+        private static void BuildLinkSidebar(State st)
+        {
+            try
+            {
+                Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                if (w == null) return;
+                FrameworkElement leftPage = null;
+                Border left = FindByName(w, "PanMainLeft") as Border;
+                if (left != null) leftPage = left.Child as FrameworkElement;
+                if (leftPage == null) return;
+                Panel host = leftPage as Panel;
+                if (host == null) return;
+                if (host.Children.Count > 0) return;   // 已经建过
+
+                string head = "<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+                              "xmlns:sys=\"clr-namespace:System;assembly=mscorlib\" " +
+                              "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+                              "xmlns:local=\"clr-namespace:PCL;assembly=Plain Craft Launcher 2\">";
+                string xaml = head + "<StackPanel Margin=\"0,12,0,0\" Width=\"145\">" +
+                    "<local:MyListItem Title=\"创建房间\" Type=\"RadioBox\" Height=\"36\" MinPaddingRight=\"35\" IsScaleAnimationEnabled=\"False\" LogoScale=\"0.9\" Logo=\"M52.1,164.5c-1.4,0-3.1-0.5-4.2-1.3c-2.6-1.7-4-4.2-4-7V43.8c0-2.9,1.6-5.8,4.1-7c1.2-0.8,2.7-1.2,4.1-1.2c1.5,0,2.9,0.4,4.2,1.2L153.1,93c0,0,0.1,0,0.1,0.1c2.6,1.7,4,4.2,4,7c0,3-1.7,5.8-4.2,7.1l-96.8,56.2C55.1,164,53.5,164.5,52.1,164.5z M60.4,142.1l72.1-42.1L60.4,58.2V142.1z\" />" +
+                    "<local:MyListItem Title=\"加入房间\" Type=\"RadioBox\" Height=\"36\" MinPaddingRight=\"35\" IsScaleAnimationEnabled=\"False\" LogoScale=\"0.9\" Logo=\"M955 610h-59c-15 0-29 13-29 29v196c0 15-13 29-29 29h-649c-15 0-29-13-29-29v-196c0-15-13-29-29-29h-59c-15 0-29 13-29 29V905c0 43 35 78 78 78h787c43 0 78-35 78-78V640c0-15-13-29-29-29zM492 740c11 11 29 11 41 0l265-265c11-11 11-29 0-41l-41-41c-11-11-29-11-41 0l-110 110c-11 11-33 3-33-13V68C571 53 555 39 541 39h-59c-15 0-29 13-29 29v417c0 17-21 25-33 13l-110-110c-11-11-29-11-41 0L226 433c-11 11-11 29 0 41L492 740z\" />" +
+                    "<local:MyListItem Title=\"设置\" Type=\"RadioBox\" Height=\"36\" MinPaddingRight=\"35\" IsScaleAnimationEnabled=\"False\" LogoScale=\"0.85\" Logo=\"M940.4 463.7L773.3 174.2c-17.3-30-49.2-48.4-83.8-48.4H340.2c-34.6 0-66.5 18.5-83.8 48.4L89.2 463.7c-17.3 30-17.3 66.9 0 96.8L256.4 850c17.3 30 49.2 48.4 83.8 48.4h349.2c34.6 0 66.5-18.5 83.8-48.4l167.2-289.5c17.3-29.9 17.3-66.8 0-96.8z m-94.6 96.8L725.9 768.1c-17.3 30-49.2 48.4-83.8 48.4H387.5c-34.6 0-66.5-18.5-83.8-48.4L183.9 560.5c-17.3-30-17.3-66.9 0-96.8l119.8-207.5c17.3-30 49.2-48.4 83.8-48.4h254.6c34.6 0 66.5 18.5 83.8 48.4l119.8 207.5c17.3 30 17.3 66.9 0.1 96.8z M522.3 321.2c-2.5-0.1-5-0.2-7.5-0.2-119.9 0-214 110.3-186.3 235 15.8 70.9 71.5 126.6 142.4 142.4 17.5 3.9 34.7 5.4 51.4 4.7 102.1-3.9 183.6-87.9 183.6-191 0.1-103-81.5-187-183.6-190.9z m68.6 269.1c-18.5 18-43 28.9-68.6 30.7l-6 0.3c-30.2 0.4-58.6-11.4-79.7-33-19.5-20.1-30.7-47-30.9-75-0.3-29.6 11.1-57.4 32-78.3 20.6-20.6 48-32 77.2-32 2.5 0 5 0.1 7.5 0.3 26.7 1.8 51.5 13.2 70.5 32.5 19.6 20 30.8 46.9 31.2 74.9 0.2 30.2-11.5 58.6-33.2 79.6z\" />" +
+                    "</StackPanel></StackPanel>";
+                object obj = st.GetObjectFromXML.Invoke(null, new object[] { xaml });
+                Panel panel = obj as Panel;
+                if (panel == null) { Log(st, "link: sidebar build failed"); return; }
+                panel.Name = "PanItem";
+                host.Children.Add(panel);
+                SidebarPanel = panel;
+                // 只注册一次：PCL 会复用同一个 MyPageLeft，重复注册会抛“重复名称”
+                try
+                {
+                    if (leftPage.FindName("PanItem") == null)
+                    {
+                        leftPage.RegisterName("PanItem", panel);
+                        PropertyInfo ap = leftPage.GetType().GetProperty("AnimatedControl");
+                        if (ap != null && ap.CanWrite) ap.SetValue(leftPage, "PanItem", null);
+                        Log(st, "link: sidebar registered for native animation");
+                    }
+                }
+                catch (Exception ex3) { Log(st, "link register error: " + ex3.Message); }
+                Panel list = panel;
+                if (panel.Children.Count == 1 && panel.Children[0] is Panel) list = (Panel)panel.Children[0];
+                string[] secNames = new string[] { "create", "join", "settings" };
+                // 默认选中第一项（创建房间）
+                try
+                {
+                    FrameworkElement first = list.Children.Count > 0 ? list.Children[0] as FrameworkElement : null;
+                    if (first != null)
+                    {
+                        PropertyInfo cp = first.GetType().GetProperty("Checked");
+                        if (cp != null && cp.CanWrite) cp.SetValue(first, true, null);
+                    }
+                }
+                catch { }
+                for (int si = 0; si < list.Children.Count && si < secNames.Length; si++)
+                {
+                    FrameworkElement item = list.Children[si] as FrameworkElement;
+                    if (item == null) continue;
+                    string sec = secNames[si];
+                    item.AddHandler(UIElement.MouseLeftButtonUpEvent, new MouseButtonEventHandler(delegate(object s2, MouseButtonEventArgs e2)
+                    {
+                        try { LastSection = sec; ShowSection(st, sec); } catch (Exception ex) { Log(st, "link section error: " + ex.Message); }
+                    }), true);
+                }
+                SidebarPanel = panel;
+                // 只注册一次：PCL 会复用同一个 MyPageLeft，重复注册会抛“重复名称”
+                try
+                {
+                    if (leftPage.FindName("PanItem") == null)
+                    {
+                        leftPage.RegisterName("PanItem", panel);
+                        PropertyInfo ap = leftPage.GetType().GetProperty("AnimatedControl");
+                        if (ap != null && ap.CanWrite) ap.SetValue(leftPage, "PanItem", null);
+                        Log(st, "link: sidebar registered for native animation");
+                    }
+                }
+                catch (Exception ex3) { Log(st, "link register error: " + ex3.Message); }
+                Log(st, "link: sidebar built");
+            }
+            catch (Exception ex) { Log(st, "link sidebar error: " + ex.Message); }
+        }
+
+        /// <summary>分栏切换时来一下 PCL 那样的下沉淡入动画</summary>
+        private static void AnimateIn(FrameworkElement fe)
+        {
+            try
+            {
+                TranslateTransform tt = fe.RenderTransform as TranslateTransform;
+                if (tt == null)
+                {
+                    tt = new TranslateTransform(0, -16);
+                    fe.RenderTransform = tt;
+                }
+                fe.Opacity = 0;
+                tt.Y = -16;
+                DoubleAnimation fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180));
+                fade.EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+                fe.BeginAnimation(UIElement.OpacityProperty, fade);
+                DoubleAnimation slide = new DoubleAnimation(-16, 0, TimeSpan.FromMilliseconds(260));
+                slide.EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut };
+                tt.BeginAnimation(TranslateTransform.YProperty, slide);
+            }
+            catch { }
+        }
+
+        private static void ShowSection(State st, string section)
+        {
+            if (TeraPage == null) return;
+            bool touched = false;
+            WalkSections(st, TeraPage, section, ref touched);
+            if (!touched) Log(st, "link: show " + section + " (not found)"
+                );
+        }
+
+        private static void WalkSections(State st, DependencyObject el, string section, ref bool touched)
+        {
+            FrameworkElement fe = el as FrameworkElement;
+            if (fe != null)
+            {
+                string tag = fe.Tag as string;
+                if (tag != null && tag.StartsWith("sec:"))
+                {
+                    string want = tag.Substring(4);
+                    bool show = want == section;
+                    Visibility v = show ? Visibility.Visible : Visibility.Collapsed;
+                    if (fe.Visibility != v)
+                    {
+                        fe.Visibility = v;
+                        if (show) AnimateIn(fe);
+                    }
+                    touched = true;
+                }
+            }
+            int n = VisualTreeHelper.GetChildrenCount(el);
+            for (int i = 0; i < n; i++) WalkSections(st, VisualTreeHelper.GetChild(el, i), section, ref touched);
+        }
+
+        private static FrameworkElement BuildTeraPage(State st)
+        {
+            try
+            {
+                string inner = GetEmbeddedText("TCHome.xaml");
+                if (string.IsNullOrEmpty(inner)) inner = Fetch(HomeBase + "tcpage.xaml");
+                if (string.IsNullOrEmpty(inner)) { Log(st, "link: tcpage empty"); return null; }
+                string head = "<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+                              "xmlns:sys=\"clr-namespace:System;assembly=mscorlib\" " +
+                              "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+                              "xmlns:local=\"clr-namespace:PCL;assembly=Plain Craft Launcher 2\" " +
+                              "xmlns:core=\"clr-namespace:MeloongCore;assembly=MeloongCore\" " +
+                              "xmlns:corewpf=\"clr-namespace:MeloongCore.Wpf;assembly=MeloongCore.Wpf\">";
+                string xaml = head + "<StackPanel Margin=\"25,20,25,20\">" + inner + "</StackPanel></StackPanel>";
+                object obj = st.GetObjectFromXML.Invoke(null, new object[] { xaml });
+                FrameworkElement page = obj as FrameworkElement;
+                if (page != null)
+                {
+                    Log(st, "link: terracotta panel built");
+                    TeraPage = page;
+                    PendingSection = LastSection;
+                }
+                return page;
+            }
+            catch (Exception ex)
+            {
+                Exception inner2 = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
+                Log(st, "link build failed: " + inner2.GetType().Name + " " + inner2.Message);
+                return null;
+            }
+        }
+
         /// <summary>把「启动游戏」往上几层的类型 / 名字 / 尺寸打出来，方便确认插到了哪一层</summary>
         private static void DumpChain(State st, DependencyObject el)
         {
@@ -972,6 +1889,15 @@ namespace PCLPatch
             }
             catch (Exception ex) { Log(st, "sidebar container error: " + ex.Message); return false; }
         }
+        private static void SetPropDouble(object obj, string name, double value)
+        {
+            try
+            {
+                PropertyInfo p = obj.GetType().GetProperty(name);
+                if (p != null && p.CanWrite) p.SetValue(obj, value, null);
+            }
+            catch { }
+        }
         private static void SetProp(object obj, string name, object value)
         {
             if (obj == null || value == null) return;
@@ -1104,9 +2030,137 @@ namespace PCLPatch
             }
         }
 
+        private static string ReadInputText(string key)
+        {
+            return "";
+        }
+
+        private static bool NativeTcAction(State st, FrameworkElement fe, string action)
+        {
+            try
+            {
+                LoadTcInputs(fe);
+                if (action.StartsWith("tc-tog:", StringComparison.Ordinal))
+                {
+                    TcNative.Toggle(action.Substring(7));
+                    return true;
+                }
+                switch (action)
+                {
+                    case "tc-host": EnsureTcInstalled(st); if (!TcNative.Host()) return true; return true;
+                    case "tc-join":
+                        {
+                            string code = ReadTcInput("code").Replace(" ", "");
+                            if (string.IsNullOrEmpty(code)) { Log(st, "tc: 没有填联机码"); return true; }
+                            EnsureTcInstalled(st);
+                            TcNative.Join(code);
+                            return true;
+                        }
+                    case "tc-detach": TcNative.Detach(); return true;
+                    case "tc-start": EnsureTcInstalled(st); TcNative.Start(); return true;
+                    case "tc-stop": TcNative.Stop(); return true;
+                    case "tc-copy":
+                        {
+                            string c = TcNative.Code();
+                            if (!string.IsNullOrEmpty(c)) System.Windows.Clipboard.SetText(c);
+                            return true;
+                        }
+                    case "tc-url":
+                        {
+                            string u = TcNative.Url();
+                            if (!string.IsNullOrEmpty(u)) System.Windows.Clipboard.SetText(u);
+                            return true;
+                        }
+                    case "tc-pick":
+                        {
+                            Microsoft.Win32.OpenFileDialog dlg = new Microsoft.Win32.OpenFileDialog();
+                            dlg.Title = "选择 terracotta.exe";
+                            dlg.Filter = "陶瓦联机 (terracotta.exe)|terracotta.exe|可执行文件 (*.exe)|*.exe";
+                            if (dlg.ShowDialog() == true && !string.IsNullOrEmpty(dlg.FileName))
+                            {
+                                TcNative.CustomPath = dlg.FileName;
+                                TcNative.SaveSettings();
+                            }
+                            return true;
+                        }
+                    case "tc-detect":
+                        TcNative.CustomPath = "";
+                        TcNative.SaveSettings();
+                        return true;
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log(st, "tc action error: " + ex.Message);
+                return true;
+            }
+        }
+
+        private static readonly Dictionary<string, string> TcInputs = new Dictionary<string, string>();
+
+        private static void LoadTcInputs(FrameworkElement fe)
+        {
+            try
+            {
+                Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                if (w == null) return;
+                WalkInputs(w);
+            }
+            catch { }
+        }
+
+        private static void WalkInputs(DependencyObject el)
+        {
+            FrameworkElement fe = el as FrameworkElement;
+            if (fe != null)
+            {
+                string tag = fe.Tag as string;
+                if (tag != null && tag.StartsWith("in:"))
+                {
+                    TextBox tb = fe as TextBox;
+                    if (tb != null) TcInputs[tag.Substring(3)] = tb.Text;
+                }
+            }
+            int n = VisualTreeHelper.GetChildrenCount(el);
+            for (int i = 0; i < n; i++) WalkInputs(VisualTreeHelper.GetChild(el, i));
+        }
+
+        private static string ReadTcInput(string key)
+        {
+            string v;
+            return TcInputs.TryGetValue(key, out v) ? v : "";
+        }
+
+        private static int _installBusy;
+        private static string _lastFilledUrl;
+        private static void EnsureTcInstalled(State st)
+        {
+            if (TcNative.ExePath() != null) return;
+            if (Interlocked.CompareExchange(ref _installBusy, 1, 0) != 0) return;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    bool ok = TcNative.EnsureInstalled();
+                    Log(st, "tc install: " + (ok ? "ok" : "failed"));
+                }
+                finally { Interlocked.Exchange(ref _installBusy, 0); }
+            });
+        }
+
         private static void RunAction(FrameworkElement fe, string action)
         {
             State st = FindState(fe);
+            if (st != null && action.StartsWith("tc-", StringComparison.Ordinal))
+            {
+                if (NativeTcAction(st, fe, action)) return;
+            }
+            if (action == "memopt" && st != null && IsNativePreset(st))
+            {
+                ImcNative.MemOptimize(delegate(string text) { Log(st, "memopt: " + text); });
+                return;
+            }
             string baseUrl = (st != null && st.LiveBase != null) ? st.LiveBase : "http://127.0.0.1:8848/";
             string url = baseUrl + "tc?do=" + action;
             if (action == "tc-join")
@@ -1167,19 +2221,14 @@ namespace PCLPatch
                 string panel = ExtractJsonString(resp, "panel");
                 string code = ExtractJsonString(resp, "code");
                 if (st != null) st.LiveLast = null;   // 让下一次 tick 立刻回填新状态
-                if (st == null)
-                {
-                    if (!string.IsNullOrEmpty(panel)) { try { System.Diagnostics.Process.Start(panel); } catch { } }
-                    return;
-                }
+                if (st == null) return;   // 没有状态就不弹任何网页（面板我们自己画了）
                 ((DispatcherObject)st.Page).Dispatcher.BeginInvoke(DispatcherPriority.Background,
                     new Action(delegate
                     {
                         try
                         {
                             if (!string.IsNullOrEmpty(code)) Clipboard.SetText(code);
-                            if (action == "tc-panel" && !string.IsNullOrEmpty(panel))
-                                System.Diagnostics.Process.Start(panel);
+                            // 不再打开陶瓦网页面板（我们已经有内置的联机页了）
                         }
                         catch (Exception ex) { Log(st, "action ui error: " + ex.Message); }
                     }));
@@ -1188,13 +2237,15 @@ namespace PCLPatch
 
         private static State FindState(FrameworkElement fe)
         {
+            State only = null;
+            foreach (KeyValuePair<object, State> kv in States) only = kv.Value;
             foreach (KeyValuePair<object, State> kv in States)
             {
                 Panel p = kv.Value.PanCustom == null ? null : kv.Value.PanCustom.GetValue(kv.Value.Page) as Panel;
                 if (p == null) continue;
                 if (IsDescendant(p, fe)) return kv.Value;
             }
-            return null;
+            return only;   // 联机页不在 PanCustom 里，只有一个状态时直接用它
         }
 
         private static bool IsDescendant(DependencyObject root, DependencyObject target)
@@ -1242,7 +2293,8 @@ namespace PCLPatch
         {
             try
             {
-                if (st.Page == null || !((UIElement)st.Page).IsVisible) return;
+                if (st.Page == null) return;
+                bool pageVisible = ((UIElement)st.Page).IsVisible;
 
                 // 每次都尝试原地合并：合并成功时控件实例保持不变，
                 // 折叠起来的卡片（MyCard.IsSwapped）就不会被刷新重置。
@@ -1262,7 +2314,7 @@ namespace PCLPatch
                     st.LoadContent.Invoke(st.Page, new object[] { text });
                 }
 
-                st.Styled = StyleGlassCards(st);
+                if (pageVisible) st.Styled = StyleGlassCards(st);
                 st.Applied++;
                 if (st.Applied <= 10 || st.Applied % 60 == 0)
                     Log(st, "refresh #" + st.Applied + " len=" + text.Length + " merged=" + st.Merged + " rebuilt=" + st.Rebuilt);
@@ -1383,6 +2435,366 @@ namespace PCLPatch
         /// 把带 Tag="glass" 的原生折叠卡（MyCard）的白底去掉，让它露出外层毛玻璃。
         /// MyCard 的白底画在内部 MainBorder 上，直接把它清空即可。
         /// </summary>
+        // ---------------- 全局毛玻璃（个性化里的开关） ----------------
+        // 开关状态存在 PCL\imc-glass.txt；打开后把 PCL 每个 MyCard 的白底换成半透明，
+        // 背景图就能透出来（自定义主页那套也是同一个思路）。
+
+        private static bool GlassAll;
+        private static bool GlassLoaded;
+        private static readonly Dictionary<DependencyObject, Brush> GlassOrigin = new Dictionary<DependencyObject, Brush>();
+        private static readonly Dictionary<DependencyObject, bool> GlassAnimOrigin = new Dictionary<DependencyObject, bool>();
+        private static readonly Dictionary<DependencyObject, Visibility> GlassChromeOrigin = new Dictionary<DependencyObject, Visibility>();
+        private static bool GlassSwitchDone;
+        private static WeakReference GlassCardRef;
+        private static int GlassTick;
+
+        private static bool IsGlassAll()
+        {
+            if (!GlassLoaded)
+            {
+                GlassLoaded = true;
+                try
+                {
+                    string path = Path.Combine(AppDir(), "PCL", "imc-glass.txt");
+                    if (File.Exists(path)) GlassAll = File.ReadAllText(path).Trim() == "1";
+                }
+                catch { }
+            }
+            return GlassAll;
+        }
+
+        private static void SetGlassAll(State st, bool on)
+        {
+            GlassAll = on;
+            GlassLoaded = true;
+            try
+            {
+                string path = Path.Combine(AppDir(), "PCL", "imc-glass.txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, on ? "1" : "0");
+            }
+            catch { }
+            Log(st, "glass: " + (on ? "on" : "off"));
+            ApplyGlassAll(st);
+        }
+
+        private static void ApplyGlassAll(State st)
+        {
+            try
+            {
+                Window w = Application.Current == null ? null : Application.Current.MainWindow;
+                if (w == null) return;
+                GlassWalk(w);
+                // 左边栏（整块白色 Border）也做成半透明
+                FrameworkElement side = FindByName(w, "PanMainLeft");
+                if (side is Border)
+                {
+                    GlassBorder(side, (Border)side);
+                    int sc = System.Windows.Media.VisualTreeHelper.GetChildrenCount(side);
+                    for (int si = 0; si < sc; si++)
+                    {
+                        Border inner = System.Windows.Media.VisualTreeHelper.GetChild(side, si) as Border;
+                        if (inner != null) GlassBorder(inner, inner);
+                    }
+                }
+            }
+            catch (Exception ex) { Log(st, "glass error: " + ex.Message); }
+        }
+
+        private static FrameworkElement FindByName(DependencyObject root, string name)
+        {
+            FrameworkElement fe = root as FrameworkElement;
+            if (fe != null && fe.Name == name) return fe;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                FrameworkElement hit = FindByName(VisualTreeHelper.GetChild(root, i), name);
+                if (hit != null) return hit;
+            }
+            return null;
+        }
+        private static void GlassClear(DependencyObject key, Border b)
+        {
+            try
+            {
+                if (GlassAll)
+                {
+                    if (!GlassOrigin.ContainsKey(key)) GlassOrigin[key] = b.Background;
+                    b.Background = null;   // 左边栏整块底板直接抠掉，背景图才透得出来
+                }
+                else if (GlassOrigin.ContainsKey(key))
+                {
+                    b.Background = GlassOrigin[key];
+                    GlassOrigin.Remove(key);
+                }
+            }
+            catch { }
+        }
+
+        private static void GlassBorder(DependencyObject key, Border b)
+        {
+            try
+            {
+                if (GlassAll)
+                {
+                    if (!GlassOrigin.ContainsKey(key)) GlassOrigin[key] = b.Background;
+                    {
+                        b.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
+                        TryLog("glass border: " + (b.Name ?? "") + " " + (int)b.ActualWidth + "x" + (int)b.ActualHeight);
+                    }
+                }
+                else if (GlassOrigin.ContainsKey(key))
+                {
+                    b.Background = GlassOrigin[key];
+                    GlassOrigin.Remove(key);
+                }
+            }
+            catch { }
+        }
+        private static void MaybeGlassWhite(Border b)
+        {
+            try
+            {
+                SolidColorBrush sb = b.Background as SolidColorBrush;
+                if (sb == null) return;
+                Color c = sb.Color;
+                if (c.A != 255) return;                       // 已经半透明，别重复处理
+                if (c.R < 235 || c.G < 235 || c.B < 235) return; // 只处理接近白色的底板
+                if (b.ActualWidth * b.ActualHeight < 4000) return; // 按钮之类的小块不动
+                GlassBorder(b, b);
+            }
+            catch { }
+        }
+
+        private static void GlassWalk(DependencyObject el)
+        {
+            if (el == null) return;
+            try
+            {
+                object obj = el;
+                Border anyBorder = el as Border;
+                FrameworkElement anyFe = el as FrameworkElement;
+                if (anyBorder != null && anyFe != null && anyFe.Name == "PanMainLeft")
+                {
+                    // 左栏有好几层叫 PanMainLeft 的 Border，全部抠成透明
+                    GlassClear(el, anyBorder);
+                    int cc = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
+                    for (int ci = 0; ci < cc; ci++)
+                    {
+                        Border cb = System.Windows.Media.VisualTreeHelper.GetChild(el, ci) as Border;
+                        if (cb != null) GlassClear(cb, cb);
+                    }
+                }
+                // 任何带 Background 的控件，只要是接近纯白的大块，都换成半透明
+                try
+                {
+                    PropertyInfo bgp = el.GetType().GetProperty("Background");
+                    if (bgp != null && bgp.CanWrite && bgp.PropertyType == typeof(Brush))
+                    {
+                        SolidColorBrush gsb = bgp.GetValue(el, null) as SolidColorBrush;
+                        FrameworkElement gfe = el as FrameworkElement;
+                        if (gsb != null && gfe != null && gsb.Color.A == 255
+                            && gsb.Color.R >= 235 && gsb.Color.G >= 235 && gsb.Color.B >= 235
+                            && gfe.ActualWidth * gfe.ActualHeight > 4000)
+                        {
+                            if (GlassAll)
+                            {
+                                if (!GlassOrigin.ContainsKey(el)) GlassOrigin[el] = gsb;
+                                bgp.SetValue(el, new SolidColorBrush(Color.FromArgb(0x9C, 0xFF, 0xFF, 0xFF)), null);
+                            }
+                            else if (GlassOrigin.ContainsKey(el))
+                            {
+                                bgp.SetValue(el, GlassOrigin[el], null);
+                                GlassOrigin.Remove(el);
+                            }
+                        }
+                    }
+                }
+                catch { }
+                Panel anyPanel = el as Panel;
+                if (anyPanel != null && !(anyPanel is VirtualizingPanel))
+                {
+                    SolidColorBrush pb = anyPanel.Background as SolidColorBrush;
+                    if (pb != null && pb.Color.A == 255 && pb.Color.R >= 235 && pb.Color.G >= 235 && pb.Color.B >= 235
+                        && anyPanel.ActualWidth * anyPanel.ActualHeight > 4000)
+                    {
+                        if (GlassAll)
+                        {
+                            if (!GlassOrigin.ContainsKey(el)) GlassOrigin[el] = pb;
+                            anyPanel.Background = new SolidColorBrush(Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
+                        }
+                        else if (GlassOrigin.ContainsKey(el))
+                        {
+                            anyPanel.Background = GlassOrigin[el];
+                            GlassOrigin.Remove(el);
+                        }
+                    }
+                }
+                if (anyBorder != null)
+                {
+                    if (GlassAll) MaybeGlassWhite(anyBorder);
+                    else if (GlassOrigin.ContainsKey(el))
+                    {
+                        anyBorder.Background = GlassOrigin[el];
+                        GlassOrigin.Remove(el);
+                    }
+                }
+                // 左边栏不是 MyCard，是一整块 Border，单独处理
+
+                if (obj.GetType().FullName == "PCL.MyCard")
+                {
+                    FieldInfo fi = obj.GetType().GetField("MainBorder", BindingFlags.Instance | BindingFlags.NonPublic);
+                    Border border = fi == null ? null : fi.GetValue(obj) as Border;
+                    if (border != null)
+                    {
+                        if (GlassAll)
+                        {
+                            if (!GlassOrigin.ContainsKey(el))
+                            {
+                                GlassOrigin[el] = border.Background;
+                                border.Background = new SolidColorBrush(Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF));
+                                // 关掉悬停动画：鼠标移上去卡片会被染成蓝色，透过半透明看很明显；
+                                // 阴影层也藏掉，否则它会盖在毛玻璃上面
+                                PropertyInfo anim = el.GetType().GetProperty("HasMouseAnimation");
+                                if (anim != null && anim.CanWrite)
+                                {
+                                    object av = anim.GetValue(el, null);
+                                    GlassAnimOrigin[el] = av is bool && (bool)av;
+                                    if (av is bool && (bool)av) anim.SetValue(el, false, null);
+                                }
+                                FieldInfo cf = el.GetType().GetField("_MainChrome", BindingFlags.Instance | BindingFlags.NonPublic);
+                                UIElement chrome = cf == null ? null : cf.GetValue(el) as UIElement;
+                                if (chrome != null)
+                                {
+                                    GlassChromeOrigin[el] = chrome.Visibility;
+                                    chrome.Visibility = Visibility.Collapsed;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if (GlassOrigin.ContainsKey(el))
+                            {
+                                border.Background = GlassOrigin[el];
+                                GlassOrigin.Remove(el);
+                            }
+                            PropertyInfo anim2 = el.GetType().GetProperty("HasMouseAnimation");
+                            if (anim2 != null && anim2.CanWrite && GlassAnimOrigin.ContainsKey(el))
+                            {
+                                anim2.SetValue(el, GlassAnimOrigin[el], null);
+                                GlassAnimOrigin.Remove(el);
+                            }
+                            if (GlassChromeOrigin.ContainsKey(el))
+                            {
+                                FieldInfo cf2 = el.GetType().GetField("_MainChrome", BindingFlags.Instance | BindingFlags.NonPublic);
+                                UIElement chrome2 = cf2 == null ? null : cf2.GetValue(el) as UIElement;
+                                if (chrome2 != null) chrome2.Visibility = GlassChromeOrigin[el];
+                                GlassChromeOrigin.Remove(el);
+                            }
+                        }
+                    }
+                }
+                int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(el);
+                for (int i = 0; i < n; i++) GlassWalk(System.Windows.Media.VisualTreeHelper.GetChild(el, i));
+            }
+            catch { }
+        }
+
+        /// <summary>个性化页顶部插一个「全局毛玻璃」勾选框（PCL 自己的页面，只加得进去一整个卡片）</summary>
+        private static void EnsureGlassSwitch(State st)
+        {
+            if (GlassSwitchDone)
+            {
+                FrameworkElement old = GlassCardRef == null ? null : GlassCardRef.Target as FrameworkElement;
+                if (old != null && old.IsLoaded && VisualTreeHelper.GetParent(old) != null) return;
+                GlassSwitchDone = false;   // 页面被 PCL 重建了，重插一次
+            }
+            Window w = Application.Current == null ? null : Application.Current.MainWindow;
+            if (w == null) return;
+            FrameworkElement anchor = FindByText(w, "背景音乐");
+            if (anchor == null) return;              // 不在个性化页
+            try
+            {
+                // 往上找卡片所在的 StackPanel
+                DependencyObject child = anchor;
+                DependencyObject parent = VisualTreeHelper.GetParent(child);
+                Panel host = null;
+                int guard = 0;
+                while (parent != null && guard++ < 12)
+                {
+                    StackPanel sp = parent as StackPanel;
+                    if (sp != null) { host = sp; break; }
+                    child = parent;
+                    parent = VisualTreeHelper.GetParent(parent);
+                }
+                if (host == null) { Log(st, "glass: settings host not found"); return; }
+
+                // 已经插过就别再插（PCL 重排时 IsLoaded 会短暂为 false，容易插重复）
+                foreach (UIElement old in host.Children)
+                {
+                    FrameworkElement ofe = old as FrameworkElement;
+                    if (ofe != null && (ofe.Tag as string) == "imc-glass-card")
+                    {
+                        GlassSwitchDone = true;
+                        GlassCardRef = new WeakReference(ofe);
+                        return;
+                    }
+                }
+
+                Border card = new Border();
+                card.Tag = "imc-glass-card";
+                card.CornerRadius = new CornerRadius(8);
+                card.Background = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF));
+                card.Margin = new Thickness(0, 0, 0, 12);
+                card.Padding = new Thickness(16, 12, 16, 12);
+                StackPanel inner = new StackPanel();
+                card.Child = inner;
+
+                Type ckType = null;
+                try
+                {
+                    Assembly asm = w.GetType().Assembly;
+                    ckType = asm.GetType("PCL.MyCheckBox");
+                }
+                catch { }
+                if (ckType == null) { Log(st, "glass: MyCheckBox type missing"); return; }
+                object ck = Activator.CreateInstance(ckType);
+                FrameworkElement ckFe = ck as FrameworkElement;
+                SetProp(ck, "Text", "所有页面使用毛玻璃（半透明卡片）");
+                try
+                {
+                    PropertyInfo cp = ckType.GetProperty("Checked");
+                    if (cp != null && cp.CanWrite) cp.SetValue(ck, IsGlassAll(), null);
+                }
+                catch { }
+                inner.Children.Add(ckFe);
+                TextBlock tip = new TextBlock();
+                tip.Text = "打开后 PCL 所有页面的卡片都会变成半透明，背景图能透出来；改完立即生效。";
+                tip.FontSize = 11;
+                tip.Opacity = 0.7;
+                tip.TextWrapping = TextWrapping.Wrap;
+                tip.Margin = new Thickness(0, 6, 0, 0);
+                inner.Children.Add(tip);
+
+                ckFe.AddHandler(UIElement.MouseLeftButtonUpEvent,
+                    new MouseButtonEventHandler(delegate(object s, MouseButtonEventArgs e)
+                    {
+                        try
+                        {
+                            bool now = !IsGlassAll();
+                            SetProp(ck, "Checked", now);
+                            SetGlassAll(st, now);
+                        }
+                        catch { }
+                    }), true);
+
+                host.Children.Insert(0, card);
+                GlassSwitchDone = true;
+                GlassCardRef = new WeakReference(card);
+                Log(st, "glass: switch inserted into settings, host=" + host.Name + " count=" + host.Children.Count);
+            }
+            catch (Exception ex) { Log(st, "glass switch error: " + ex.Message); }
+        }
         private static bool StyleGlassCards(State st)
         {
             try
@@ -1548,6 +2960,3 @@ namespace PCLPatch
         }
     }
 }
-
-
-
