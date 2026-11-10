@@ -142,9 +142,9 @@
         <local:MyImage Tag="act:zan-open" Width="220" Height="220" HorizontalAlignment="Left"
                     Margin="0,0,0,6" Visibility="Collapsed"
                     Source="http://127.0.0.1:8848/zan/zan.jpg" EnableCache="True"
-                    ToolTip="微信扫码赞赏；点击图片可在浏览器里放大" />
+                    ToolTip="微信扫码赞赏；点击图片可在启动器里放大" />
         <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12" Margin="0,2,0,0"
-                   Text="微信扫码赞赏 · 点图片可放大查看" />
+                   Text="微信扫码赞赏 · 点图片在启动器里放大" />
     </StackPanel>
 </Border>
 

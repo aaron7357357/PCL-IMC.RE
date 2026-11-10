@@ -1271,6 +1271,62 @@ namespace PCLPatch
         }
 
         /// <summary>把内嵌的赞赏码塞进图片控件，摆脱对本地服务的依赖。</summary>
+        /// <summary>PCL 内放大查看图片：半透明黑底 + 居中大图，点一下 / Esc 关闭。</summary>
+        private static void ShowImageOverlay(ImageSource source)
+        {
+            try
+            {
+                TryLog("zan overlay open");
+                Window owner = Application.Current == null ? null : Application.Current.MainWindow;
+                Window win = new Window();
+                win.WindowStyle = WindowStyle.None;
+                win.AllowsTransparency = true;
+                win.Background = new SolidColorBrush(Color.FromArgb(0xD8, 0, 0, 0));
+                win.ResizeMode = ResizeMode.NoResize;
+                win.ShowInTaskbar = false;
+                if (owner != null)
+                {
+                    win.Owner = owner;
+                    win.WindowStartupLocation = WindowStartupLocation.Manual;
+                    win.Left = owner.Left;
+                    win.Top = owner.Top;
+                    win.Width = owner.ActualWidth;
+                    win.Height = owner.ActualHeight;
+                }
+                else
+                {
+                    win.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                    win.Width = 900;
+                    win.Height = 700;
+                }
+                StackPanel panel = new StackPanel();
+                panel.VerticalAlignment = VerticalAlignment.Center;
+                panel.HorizontalAlignment = HorizontalAlignment.Center;
+                System.Windows.Controls.Image img = new System.Windows.Controls.Image();
+                img.Source = source;
+                img.Stretch = Stretch.Uniform;
+                img.MaxHeight = win.Height * 0.72;
+                img.MaxWidth = win.Width * 0.78;
+                img.Margin = new Thickness(0, 0, 0, 12);
+                TextBlock tip = new TextBlock();
+                tip.Text = "点击任意处关闭";
+                tip.Foreground = new SolidColorBrush(Color.FromArgb(0xB0, 255, 255, 255));
+                tip.HorizontalAlignment = HorizontalAlignment.Center;
+                tip.FontSize = 13;
+                panel.Children.Add(img);
+                panel.Children.Add(tip);
+                win.Content = panel;
+                win.MouseDown += delegate { win.Close(); };
+                win.KeyDown += delegate(object s3, System.Windows.Input.KeyEventArgs e3)
+                {
+                    if (e3.Key == System.Windows.Input.Key.Escape) win.Close();
+                };
+                win.Loaded += delegate { win.Activate(); win.Focus(); };
+                win.ShowDialog();
+            }
+            catch (Exception ex) { TryLog("zan overlay error: " + ex.Message); }
+        }
+
         private static void ApplyZanImage(State st, DependencyObject root)
         {
             try
@@ -1287,6 +1343,13 @@ namespace PCLPatch
                 bmp.EndInit();
                 bmp.Freeze();
                 image.Source = bmp;
+                image.Cursor = System.Windows.Input.Cursors.Hand;
+                // 点图片在 PCL 里放大（不再跳浏览器、不再依赖本地服务）
+                image.MouseLeftButtonUp += delegate(object sender2, System.Windows.Input.MouseButtonEventArgs e2)
+                {
+                    e2.Handled = true;
+                    ShowImageOverlay(bmp);
+                };
                 Log(st, "zan image: embedded");
             }
             catch (Exception ex) { Log(st, "zan image error: " + ex.Message); }
@@ -1966,7 +2029,13 @@ namespace PCLPatch
                 {
                     if (action == "zan-toggle") { ToggleZan(fe); return; }
                     if (action == "tc-pick") { PickTerracotta(fe); return; }
-                    if (action == "zan-open") { OpenZan(fe); return; }
+                    if (action == "zan-open")
+                    {
+                        // 内嵌了赞赏码就交给 ApplyZanImage 里的「PCL 内放大」，不跳浏览器
+                        if (ReadEmbeddedBytes("zan.jpg") != null) return;
+                        OpenZan(fe);
+                        return;
+                    }
                     if (action == "tc-stop")
                     {
                         // 关闭联机 = 直接杀掉陶瓦进程，会断掉房间里所有人，先确认一次
