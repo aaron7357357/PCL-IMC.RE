@@ -1270,6 +1270,45 @@ namespace PCLPatch
                 "</Grid>";
         }
 
+        /// <summary>把内嵌的赞赏码塞进图片控件，摆脱对本地服务的依赖。</summary>
+        private static void ApplyZanImage(State st, DependencyObject root)
+        {
+            try
+            {
+                FrameworkElement img = FindByTagName(root, "act:zan-open");
+                System.Windows.Controls.Image image = img as System.Windows.Controls.Image;
+                if (image == null) return;
+                byte[] data = ReadEmbeddedBytes("zan.jpg");
+                if (data == null) return;
+                BitmapImage bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = new MemoryStream(data);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                image.Source = bmp;
+                Log(st, "zan image: embedded");
+            }
+            catch (Exception ex) { Log(st, "zan image error: " + ex.Message); }
+        }
+
+        private static byte[] ReadEmbeddedBytes(string name)
+        {
+            try
+            {
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+                {
+                    if (s == null) return null;
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        return ms.ToArray();
+                    }
+                }
+            }
+            catch { return null; }
+        }
+
         private static void EnsureImcPreset(State st)
         {
             object typeValue = GetSetting(st, "UiCustomType");
@@ -1294,6 +1333,7 @@ namespace PCLPatch
                 if (page == null) return;
                 host.Children.Clear();
                 host.Children.Add(page);
+                ApplyZanImage(st, page);
                 ImcPresetLoaded = true;
                 _verSig = null;
                 Log(st, "preset: imc.re主页 loaded");
@@ -2152,6 +2192,21 @@ namespace PCLPatch
         private static void RunAction(FrameworkElement fe, string action)
         {
             State st = FindState(fe);
+            if (st != null && action == "zan-open" && IsNativePreset(st))
+            {
+                try
+                {
+                    byte[] data = ReadEmbeddedBytes("zan.jpg");
+                    if (data != null)
+                    {
+                        string tmp = Path.Combine(Path.GetTempPath(), "PCL-IMC-zan.jpg");
+                        File.WriteAllBytes(tmp, data);
+                        System.Diagnostics.Process.Start(tmp);
+                    }
+                }
+                catch (Exception ex) { Log(st, "zan open error: " + ex.Message); }
+                return;
+            }
             if (st != null && action.StartsWith("tc-", StringComparison.Ordinal))
             {
                 if (NativeTcAction(st, fe, action)) return;
