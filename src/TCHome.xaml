@@ -11,6 +11,8 @@
             <local:MyButton Grid.Column="1" Tag="act:tc-detach|dis:tcenable" HorizontalAlignment="Stretch" Height="34" Margin="0,0,6,0" Padding="8,0,8,0" ColorType="Highlight" Text="断开房间" />
             <local:MyButton Grid.Column="2" Tag="act:tc-copy|dis:tccodeok" HorizontalAlignment="Stretch" Height="34" Padding="8,0,8,0" ColorType="Highlight" Text="复制邀请码" />
         </Grid>
+        <TextBlock Tag="egghint" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,0,0,10"
+                   FontSize="12" Foreground="#FF8A5A1C" Text="" />
         <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
                    Text="创建房间后，进单人存档按 ESC → 对局域网开放，就会生成邀请码；把邀请码发给朋友即可。" />
     </StackPanel>

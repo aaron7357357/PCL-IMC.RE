@@ -85,6 +85,7 @@ namespace PCLPatch
                     LoadWindowIcon();   // 先准备好窗口图标，tick 里再套上去
                     AutoTerracotta();   // 开了「启动启动器时自动启动」就把陶瓦拉起来
                     TcNative.LogHook = delegate(string m) { TryLog(m); };
+                    Egg.LogHook = delegate(string m) { TryLog(m); };
                     AutoTerracottaNative();
                     // ShowSplash(st);  // 加载画面已改为直接替换 exe 内嵌图标，这里不再需要
                     Log(st, "install: interval=" + ms + "ms, LoadContent=" + (st.LoadContent != null)
@@ -386,6 +387,7 @@ namespace PCLPatch
                 // 实时数据：三种模式都跑。页面本身恒定，只有带 Tag="live:*" 的控件改文字。
                 StartLive(st);
                 ApplyPresetOnce(st);
+                ApplyBrandOnce(st);
                 EnsurePresetItem(st);
                 EnsureImcPreset(st);
                 EnsureVersionRows(st);
@@ -435,7 +437,11 @@ namespace PCLPatch
                         }
                         string json = ImcNative.BuildLiveJson();
                         ((DispatcherObject)st.Page).Dispatcher.BeginInvoke(DispatcherPriority.Background,
-                            new Action(delegate { ApplyLive(st, json); }));
+                            new Action(delegate
+                            {
+                                ApplyLive(st, json);
+                                try { if (TeraPage != null) Egg.OnTc(TeraPage, TcNative.Code()); } catch { }
+                            }));
                     }
                     catch { }
                     finally { Interlocked.Exchange(ref st.LiveBusy, 0); }
@@ -496,6 +502,12 @@ namespace PCLPatch
                 int touched = 0;
                 if (host != null) touched += WalkLive(host, d, status);
                 if (TeraPage != null) touched += WalkLive(TeraPage, d, status);
+            try
+            {
+                Panel host2 = st.PanCustom == null ? null : st.PanCustom.GetValue(st.Page) as Panel;
+                if (host2 != null) Egg.OnLive(Application.Current == null ? null : Application.Current.MainWindow, host2, json);
+            }
+            catch { }
                 // 左侧栏那行小字跟着「内存优化」的实时状态走
                 try
                 {
@@ -901,6 +913,56 @@ namespace PCLPatch
         // ---------------- 首次启动自动套用我们的主页预设 ----------------
 
         private static bool _presetOnce;
+        // ---------------- 首次启动把标题栏文字固定成 PCL IMC.RE ----------------
+
+        private static bool _brandOnce;
+        private static void ApplyBrandOnce(State st)
+        {
+            if (_brandOnce) return;
+            _brandOnce = true;
+            try
+            {
+                string marker = Path.Combine(AppDir(), "PCL", "imc-brand-once.txt");
+                if (File.Exists(marker)) return;
+                object typeValue = GetSetting(st, "UiLogoType");
+                int t = typeValue is int ? (int)typeValue : -1;
+                if (t != 2)
+                {
+                    SetSetting(st, "UiLogoType", 2);
+                    SetSettingText(st, "UiLogoText", "PCL IMC.RE");
+                    try
+                    {
+                        MethodInfo update = st.Page.GetType().Assembly.GetType("PCL.FormMain")
+                            .GetMethod("UpdateBackgroundAndTitleBar", BindingFlags.Public | BindingFlags.Static);
+                        if (update != null) update.Invoke(null, null);
+                    }
+                    catch { }
+                    Log(st, "brand: 标题栏设为 PCL IMC.RE");
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(marker));
+                File.WriteAllText(marker, "1");
+            }
+            catch (Exception ex) { Log(st, "brand error: " + ex.Message); }
+        }
+
+        private static void SetSettingText(State st, string key, string value)
+        {
+            try
+            {
+                Type settings = st.Page.GetType().Assembly.GetType("PCL.Settings");
+                if (settings == null) return;
+                foreach (MethodInfo m in settings.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (m.Name != "SetSafe") continue;
+                    ParameterInfo[] ps = m.GetParameters();
+                    if (ps.Length != 3 || ps[0].ParameterType != typeof(string)) continue;
+                    m.Invoke(null, new object[] { key, value, null });
+                    return;
+                }
+            }
+            catch (Exception ex) { TryLog("set text failed: " + ex.Message); }
+        }
+
         private static void ApplyPresetOnce(State st)
         {
             if (_presetOnce) return;
@@ -1397,6 +1459,9 @@ namespace PCLPatch
                 host.Children.Clear();
                 host.Children.Add(page);
                 ApplyZanImage(st, page);
+                Egg.ApplyBanner(page);
+                try { Egg.HookPage(Application.Current == null ? null : Application.Current.MainWindow, page); }
+                catch { }
                 ImcPresetLoaded = true;
                 _verSig = null;
                 Log(st, "preset: imc.re主页 loaded");

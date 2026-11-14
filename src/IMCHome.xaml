@@ -1,7 +1,7 @@
-<local:MyImage Width="478" Height="140" HorizontalAlignment="Center" Margin="0,0,0,15"
+<local:MyImage Tag="banner" Width="478" Height="140" HorizontalAlignment="Center" Margin="0,0,0,15"
             Source="http://127.0.0.1:8848/banner/logo.png" EnableCache="True" />
 
-<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+<Border Tag="goldcard" BorderBrush="#66FFFFFF" BorderThickness="1"
         CornerRadius="12" Margin="0,0,0,14">
     <Border.Background>
         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
@@ -115,6 +115,18 @@
             <local:MyButton Grid.Column="1" HorizontalAlignment="Stretch" Margin="4,0,0,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
                         Text="打开加群页" EventType="打开网页" EventData="https://qun.qq.com/" ToolTip="在浏览器打开 QQ 群官网；如有群邀请链接可替换此地址实现一键加群" />
         </Grid>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF233347"
+                   Text="群号：1135547472　启动器交流群" />
+        <Grid Margin="0,0,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <local:MyButton Grid.Column="0" HorizontalAlignment="Stretch" Margin="0,0,4,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="复制启动器群号" EventType="复制文本" EventData="1135547472" ToolTip="点击复制群号，粘贴到 QQ 搜索即可找到群" />
+            <local:MyButton Grid.Column="1" HorizontalAlignment="Stretch" Margin="4,0,0,0" Height="35" Padding="13,0,13,0" ColorType="Highlight"
+                        Text="打开加群页" EventType="打开网页" EventData="https://qun.qq.com/" ToolTip="在浏览器打开 QQ 群官网；如有群邀请链接可替换此地址实现一键加群" />
+        </Grid>
     </StackPanel>
 </Border>
 
@@ -160,6 +172,61 @@
         <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
     </Border.Effect>
     <StackPanel Margin="22,15,22,16">
+        <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,6" TextWrapping="Wrap"
+                   Foreground="#FF233347" Text="赞助商排行" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10" Foreground="#FF6B7885" FontSize="12"
+                   Text="感谢以下玩家对启动器开发的支持。" />
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="46" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Width="34" Height="22" CornerRadius="6" Background="#FFE0A21C" VerticalAlignment="Center">
+                <TextBlock Text="1" FontSize="12" FontWeight="Bold" Foreground="White"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="13" TextTrimming="CharacterEllipsis"
+                       Foreground="#FF233347" Text="歪比歪比" ToolTip="歪比歪比" />
+            <TextBlock Grid.Column="2" VerticalAlignment="Center" Margin="8,0,10,0" FontSize="12"
+                       Foreground="#FF6B7885" Text="QQ 3884579842" />
+            <local:MyButton Grid.Column="3" Height="28" Padding="12,0,12,0" ColorType="Highlight"
+                        Text="复制" EventType="复制文本" EventData="3884579842" ToolTip="复制 歪比歪比 的 QQ 号" />
+        </Grid>
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="46" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Width="34" Height="22" CornerRadius="6" Background="#FF9AA7B4" VerticalAlignment="Center">
+                <TextBlock Text="2" FontSize="12" FontWeight="Bold" Foreground="White"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="13" TextTrimming="CharacterEllipsis"
+                       Foreground="#FF233347" Text="MrlingXD" ToolTip="MrlingXD" />
+            <TextBlock Grid.Column="2" VerticalAlignment="Center" Margin="8,0,10,0" FontSize="12"
+                       Foreground="#FF6B7885" Text="QQ 2675734952" />
+            <local:MyButton Grid.Column="3" Height="28" Padding="12,0,12,0" ColorType="Highlight"
+                        Text="复制" EventType="复制文本" EventData="2675734952" ToolTip="复制 MrlingXD 的 QQ 号" />
+        </Grid>
+    </StackPanel>
+</Border>
+
+<Border BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BFFFFFFF" Offset="0" />
+            <GradientStop Color="#94FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <Border.Effect>
+        <DropShadowEffect BlurRadius="22" ShadowDepth="2" Direction="270" Opacity="0.25" Color="#FF15283C" />
+    </Border.Effect>
+    <StackPanel Margin="22,15,22,16">
             <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
                        Foreground="#FF233347" Text="联系创作者" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" Foreground="#FF233347"
@@ -185,7 +252,7 @@
     </Border.Effect>
     <StackPanel Margin="22,15,22,16">
             <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" TextWrapping="Wrap"
-                       Foreground="#FF233347" Text="关于" />
+                       Foreground="#FF233347" Text="关于" Tag="egglogo" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" FontWeight="Bold" Foreground="#FF233347"
                    Text="这是什么" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
@@ -235,3 +302,23 @@
     </StackPanel>
 </Border>
 
+<!-- 彩蛋卡片：默认隐藏，连点「关于」标题 3 次展开 -->
+<Border Tag="eggcard" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1"
+        CornerRadius="12" Margin="0,0,0,14">
+    <Border.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#E6FFF6D9" Offset="0" />
+            <GradientStop Color="#CCFFE9AE" Offset="1" />
+        </LinearGradientBrush>
+    </Border.Background>
+    <StackPanel Margin="22,15,22,16">
+        <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" Foreground="#FF233347"
+                   Text="你找到了一个彩蛋" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF233347"
+                   Text="这里是 IMC.RE。服务器从 1.8 一路开到 1.21，能陪到这里的人不多。" />
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF6B7885" FontSize="12"
+                   Text="彩蛋清单：连点 banner 5 次 / 连点这个标题 3 次 / 键盘依次按 I M C / 在线人数破百。" />
+        <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"
+                   Text="别告诉太多人 —— 或者告诉，反正服务器还开着。" />
+    </StackPanel>
+</Border>

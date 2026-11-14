@@ -1,6 +1,8 @@
-﻿这个文件夹就是改版后的 PCL，直接双击「Plain Craft Launcher 2.exe」即可。
+﻿这个文件夹就是改版后的 PCL，只有一个 exe，直接双击「Plain Craft Launcher 2.exe」。
 
-PCLPatch.dll 必须和 exe 放在同一个文件夹里，否则主页/联机功能不会生效。
+补丁已经合并进 exe，不再需要 PCLPatch.dll。
 
-主页预设第一次启动会自动切换成「imc.re主页」，
-想重新触发就删掉 PCL\imc-preset-once.txt 再启动。
+第一次启动会自动把主页预设切成「imc.re主页」、标题栏改成 PCL IMC.RE。
+想重新触发就删掉 PCL\imc-preset-once.txt 和 PCL\imc-brand-once.txt 再启动。
+
+注意：不要放在 Program Files、Documents 这类目录，PCL 会因目录不可写而拒绝启动。

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -418,6 +419,12 @@ namespace PCLPatch
                 info = "版本：" + (string.IsNullOrEmpty(st.Version) ? "—" : st.Version)
                        + "　在线：" + st.OnlinePlayers + (st.MaxPlayers >= 0 ? "/" + st.MaxPlayers : "")
                        + "　延迟：" + st.Latency + "ms";
+                // 彩蛋 2：深夜提示
+                int hour = DateTime.Now.Hour;
+                if (hour >= 23 || hour < 5) info += "　（这么晚还在肝？）";
+                // 彩蛋 7：开服周年
+                string ann = AnniversaryText();
+                if (ann != "") info += "　" + ann;
                 // 很多服务器在 sample 里塞的是装饰性文字（还带 § 颜色码），不是真玩家，统一按“未公开”处理
                 plist = "服务器未公开在线玩家列表。";
             }
@@ -480,6 +487,33 @@ namespace PCLPatch
                 }
             }
             return sb.ToString();
+        }
+
+        /// <summary>读 PCL\imc-egg.txt 里的 anniversary=YYYY-MM-DD，当天返回一句纪念文案。</summary>
+        private static string AnniversaryText()
+        {
+            try
+            {
+                string cfg = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PCL", "imc-egg.txt");
+                if (!File.Exists(cfg)) return "";
+                foreach (string line in File.ReadAllLines(cfg, Encoding.UTF8))
+                {
+                    string text = line.Trim();
+                    if (!text.StartsWith("anniversary", StringComparison.OrdinalIgnoreCase)) continue;
+                    int eq = text.IndexOf('=');
+                    if (eq < 0) continue;
+                    string value = text.Substring(eq + 1).Trim();
+                    DateTime date;
+                    if (!DateTime.TryParse(value, out date)) continue;
+                    DateTime now = DateTime.Now;
+                    if (date.Month != now.Month || date.Day != now.Day) return "";
+                    int years = now.Year - date.Year;
+                    if (years <= 0) return "★ 今天是 IMC.RE 的纪念日 ★";
+                    return "★ 今天是 IMC.RE 开服 " + years + " 周年 ★";
+                }
+            }
+            catch { }
+            return "";
         }
 
         // ---------------- 内存优化 ----------------
