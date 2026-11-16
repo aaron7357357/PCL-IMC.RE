@@ -79,8 +79,8 @@ if (-not $NoDeploy) {
     Compress-Archive -Path $full -DestinationPath $z2 -CompressionLevel Optimal
 
     $desk = [Environment]::GetFolderPath('Desktop')
-    Copy-Item $linked (Join-Path $desk 'PCL IMC.RE v1.3 单文件.exe') -Force
-    Copy-Item $z1 (Join-Path $desk 'PCL IMC.RE v1.3 单文件.zip') -Force
+    Copy-Item $linked (Join-Path $desk 'PCL IMC.RE v1.4 单文件.exe') -Force
+    Copy-Item $z1 (Join-Path $desk 'PCL IMC.RE v1.4 单文件.zip') -Force
 
     Start-Process 'D:\awa\Plain Craft Launcher 2.exe'
     Write-Host ("      完成，MD5：{0}" -f (Get-FileHash $linked -Algorithm MD5).Hash)

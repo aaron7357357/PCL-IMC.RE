@@ -262,7 +262,7 @@
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
                    Text="· 服务器状态：在线 / 离线、MOTD、版本、在线人数、延迟，每秒刷新" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
-                   Text="· 按版本进服：1.8 ~ 1.21.11 每个版本一行，「正版」连 on.imc.cab，「离线」连 off.imc.cab" />
+                   Text="· 按版本进服：1.8 及以上每个版本一行，「正版」连 on.imc.cab，「离线」连 off.imc.cab" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
                    Text="· 联机 · 陶瓦：创建房间 / 复制联机码 / 加入房间 / 关闭联机，全程不弹网页；本机没装陶瓦时首次使用会自动下载安装" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,14" Foreground="#FF233347"
@@ -315,7 +315,7 @@
         <TextBlock FontWeight="Bold" FontSize="15" Margin="0,0,0,8" Foreground="#FF233347"
                    Text="你找到了一个彩蛋" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF233347"
-                   Text="这里是 IMC.RE。服务器从 1.8 一路开到 1.21，能陪到这里的人不多。" />
+                   Text="这里是 IMC.RE。服务器从 1.8 一路开到现在，能陪到这里的人不多。" />
         <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#FF6B7885" FontSize="12"
                    Text="彩蛋清单：连点 banner 5 次 / 连点这个标题 3 次 / 键盘依次按 I M C / 在线人数破百。" />
         <TextBlock TextWrapping="Wrap" Foreground="#FF6B7885" FontSize="12"

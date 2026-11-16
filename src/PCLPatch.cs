@@ -1243,19 +1243,39 @@ namespace PCLPatch
             return names;
         }
 
-        /// <summary>把版本名里的数字提出来比较，判断是否落在 1.8 ~ 1.21.11。</summary>
+        /// <summary>
+        ///     判断版本是否落在支持区间内。
+        ///     <para>
+        ///         Minecraft 从 2026 年起改用日期式版本号（<c>26.1</c>、<c>26.2</c>、<c>26.3</c>…），
+        ///         不再有 <c>1.x</c> 的大版本前缀。老代码只认 <c>major == 1</c> 且 patch &lt;= 11，
+        ///         结果 <c>26.3</c> 这种版本被整片过滤掉，界面上显示「没有符合条件的版本」。
+        ///     </para>
+        ///     <para>
+        ///         现在的规则：
+        ///         <list type="bullet">
+        ///             <item><c>1.8</c> ~ <c>1.21.11</c>：老版本号，保持原区间。</item>
+        ///             <item><c>1.21.12</c> 及之后的所有 <c>1.x</c>：放行（老编号继续往后走也能收）。</item>
+        ///             <item><c>24.x</c> 及以上：日期式版本号，全部放行。</item>
+        ///         </list>
+        ///         下限不放宽：<c>1.7</c> 及更早的服务端协议差异太大，连上去只会报错。
+        ///     </para>
+        /// </summary>
         private static bool InRange(string name)
         {
             Match m = Regex.Match(name, "(\\d+)\\.(\\d+)(?:\\.(\\d+))?");
             if (!m.Success) return false;
             int major = int.Parse(m.Groups[1].Value);
             int minor = int.Parse(m.Groups[2].Value);
-            int patch = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+
+            // 日期式版本号（26.x / 27.x…）：上限未知，一律放行
+            if (major >= 24) return true;
+
             if (major != 1) return false;
             if (minor < 8) return false;
-            if (minor > 21) return true;
-            if (minor < 21) return true;
-            return patch <= 11;
+
+            // 1.21 系列里再往后的小版本（1.21.12+）也放行；
+            // 更早的 1.8~1.21.11 保持原来的判定，不用额外判断
+            return true;
         }
 
         private static FrameworkElement FindByTagName(DependencyObject root, string tag)
@@ -1290,8 +1310,8 @@ namespace PCLPatch
                 if (hint != null)
                 {
                     if (all.Count == 0) hint.Text = "没扫描到本机已安装的游戏版本，可用左侧的「启动游戏」进入。";
-                    else if (vers.Count == 0) hint.Text = "已装版本里没有 1.8~1.21.11 的版本，可用左侧的「启动游戏」进入。";
-                    else hint.Text = "正版点「正版」，离线点「离线」；只列 1.8~1.21.11 的版本（" + vers.Count + " 个）。";
+                    else if (vers.Count == 0) hint.Text = "已装版本里没有 1.8 及以上的版本，可用左侧的「启动游戏」进入。";
+                    else hint.Text = "正版点「正版」，离线点「离线」；已列出版本（" + vers.Count + " 个）。";
                 }
                 rowsPanel.Children.Clear();
                 if (vers.Count == 0) return;
